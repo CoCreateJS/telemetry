@@ -12,6 +12,7 @@
     "html5-framework",
     "javascript-framework"
   ],
+  "type": "module",
   "main": "./src/index.js",
   "publishConfig": {
     "access": "public"
