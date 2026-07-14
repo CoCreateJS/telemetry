@@ -1,3 +1,12 @@
+## [1.14.3](https://github.com/CoCreate-app/CoCreate-metrics/compare/v1.14.2...v1.14.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* removed post install ([16d9ca8](https://github.com/CoCreate-app/CoCreate-metrics/commit/16d9ca858fa11b92ef79f69f5b15b39a04f3a26e))
+* semantic version handling. Reorganize .gitignore for improved clarity and structure ([7c875ce](https://github.com/CoCreate-app/CoCreate-metrics/commit/7c875ce0f088ea20b356e475b23525acf0da2040))
+* update module export to ES6 syntax in release.config.js ([d09ead6](https://github.com/CoCreate-app/CoCreate-metrics/commit/d09ead66e4b170098f67f9a5b732e912f479998a))
+
 ## [1.14.2](https://github.com/CoCreate-app/CoCreate-metrics/compare/v1.14.1...v1.14.2) (2025-05-01)
 
 
