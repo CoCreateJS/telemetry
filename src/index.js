@@ -29,12 +29,13 @@ import { getValueFromObject } from '@cocreate/utils';
 // ==============================================================================
 // Module-Level Sandbox State (ESM Singleton Container)
 // ==============================================================================
-let server = null;              // Reference to the main CoCreateServer instance
+let server = null;          // Reference to the main CoCreateServer instance
 let activeIntervalId = null;    // Storage for the core execution loop interval
 let lastCpuInfo = null;         // Cache for the previous CPU metrics sample
 let metricsConfig = null;       // In-memory reference to loaded configuration map
 let dbBuffer = [];              // In-memory array to accumulate raw metric ticks
 let lastDbFlushTimestamp = Date.now(); // Record of last database persistence execution
+let lastEmergencyAlertTimestamp = 0;   // Throttling lock for high-priority OOM warnings
 
 // Registry for dynamic metrics pushed by external modules (e.g. socket-mesh)
 const customMetricsRegistry = {};
@@ -55,7 +56,6 @@ const defaults = {
     retentionDays: 0, // Default set to 0 (infinite retention, never auto-delete)
     broadcast: true
 };
-
 
 /**
  * Reads memory allocations using a local-dev fallback if Linux /proc is unavailable.
@@ -171,6 +171,27 @@ export function calculateCpuUsage(cpuInfo1, cpuInfo2) {
     });
 }
 
+/**
+ * Calculates a dynamic safety memory threshold percentage based on the physical core-to-memory ratio.
+ * This is symmetrically checked locally in metrics.js to align the 1-second emergency loops.
+ * 
+ * @returns {number} Calculated maximum safe memory percentage threshold (capped between 50% and 90%)
+ */
+function calculateDynamicSafetyThreshold() {
+    const coresCount = os.cpus().length;
+    const totalMemoryMb = os.totalmem() / 1024 / 1024;
+    
+    const allocationRatePerCoreMs = 15; // Estimated peak allocation speed in MB/sec under sustained load
+    const bootWindowSeconds = 60;      // Boot delay window for new instances
+    
+    const requiredHeadroomMb = coresCount * allocationRatePerCoreMs * bootWindowSeconds;
+    const headroomPercentage = (requiredHeadroomMb / totalMemoryMb) * 100;
+    
+    const maxSafePercentage = Math.round(100 - headroomPercentage);
+    
+    // Safety clamps: Prevent calculated values from getting too extreme
+    return Math.max(50, Math.min(90, maxSafePercentage));
+}
 
 /**
  * Dynamic Metrics Ingestion Protocol.
@@ -194,7 +215,6 @@ export function send(component, data) {
         console.error('[@cocreate/metrics] Error capturing custom metric transmission:', err.message);
     }
 }
-
 
 /**
  * Core execution tick. Collects system specs, appends external custom registries,
@@ -250,8 +270,37 @@ export function read() {
         timestamp: new Date().toISOString()
     };
 
-
     dbBuffer.push(JSON.parse(JSON.stringify(currentMetrics)));
+
+    // --- INSTANTANEOUS 1-SECOND OOM PROTECTION CHECK ---
+    // If memory spikes above the threshold on any individual 1-second sample,
+    // fire an immediate emergency signal to the Master process.
+    let targetMemoryThreshold = metricsConfig 
+        ? parseInt(getValueFromObject(metricsConfig, 'metrics.scaleUpMemoryThreshold'), 10) 
+        : 85;
+
+    // Apply Dynamic Safety limits to 1s emergency checks if enabled (on by default)
+    const isSafetyLimitsEnabled = getValueFromObject(metricsConfig, 'metrics.safetyLimits') !== false && getValueFromObject(metricsConfig, 'metrics.safetyLimits') !== 'false';
+    
+    if (isSafetyLimitsEnabled) {
+        const dynamicSafetyThreshold = calculateDynamicSafetyThreshold();
+        if (targetMemoryThreshold > dynamicSafetyThreshold) {
+            targetMemoryThreshold = dynamicSafetyThreshold;
+        }
+    }
+
+    if (currentMetrics.memory.percentage >= targetMemoryThreshold) {
+        const emergencyCooldown = 300000; // Throttle to maximum 1 emergency signal every 5 minutes per worker node
+        if (Date.now() - lastEmergencyAlertTimestamp >= emergencyCooldown) {
+            lastEmergencyAlertTimestamp = Date.now();
+            console.warn(`[@cocreate/metrics] [EMERGENCY] Memory threshold breached on 1s tick (${currentMetrics.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
+            
+            server.send({
+                method: 'metric.emergency',
+                data: currentMetrics
+            });
+        }
+    }
 
     // Dynamic Time-Staggering Check:
     // All workers write their own process stats, but their flush intervals are staggered
@@ -271,11 +320,10 @@ export function read() {
     return currentMetrics;
 }
 
-
 /**
  * Processes buffered raw tick records to calculate minimum, maximum, and average values.
  * Writes aggregated results as a single document utilizing standard server.crud structures.
- * Also saves the statistical averages to local IPC (via workerStorage) to support real-time self-scaling.
+ * Also emits the statistical metrics directly to the IPC loop using fail-fast server.send().
  * Cleans up outdated database telemetry metrics if retentionDays is configured.
  */
 export async function flushMetricsToDatabase() {
@@ -350,17 +398,13 @@ export async function flushMetricsToDatabase() {
         dbBuffer = [];
         lastDbFlushTimestamp = Date.now();
 
-        // 1. UPDATE THE LOCAL IPC WORKER STORAGE
-        // Writes the pre-aggregated summary directly to the shared primary thread.
-        const storageKey = `worker_${workerId}_metrics`;
-        const history = await server.workerStorage.get(storageKey) || [];
-        history.push(aggregatedPayload);
-        
-        // Keep up to 10 historical sweeps (representing several minutes/hours depending on writeInterval)
-        if (history.length > 10) {
-            history.shift();
-        }
-        await server.workerStorage.set(storageKey, history);
+        // 1. DISPATCH LIVE EVENT VIA SERVER SEND (FAIL-FAST)
+        // Replaced workerStorage loops. Directly fire the 'metric' method upstream.
+        // It should route cleanly or throw immediately.
+        server.send({
+            method: 'metric',
+            data: aggregatedPayload
+        });
 
         // 2. WRITE HISTORICAL RECORD TO DATABASE
         // Target standard CoCreate server storage configuration using server.crud directly
@@ -416,7 +460,6 @@ export async function flushMetricsToDatabase() {
     }
 }
 
-
 /**
  * Returns the cached memory and system snapshot compiled during the last execution sweep.
  * 
@@ -425,7 +468,6 @@ export async function flushMetricsToDatabase() {
 export function get() {
     return currentMetrics;
 }
-
 
 /**
  * Integrates metrics capabilities, loads configuration, and schedules staggered execution threads.
@@ -487,7 +529,6 @@ export async function init(serverCtx) {
 
     return metricsAPI;
 }
-
 
 export function stop() {
     if (activeIntervalId) {
