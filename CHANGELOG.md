@@ -1,3 +1,13 @@
+# [1.15.0](https://github.com/CoCreate-app/CoCreate-server-telemetry/compare/v1.14.3...v1.15.0) (2026-07-17)
+
+
+### Features
+
+* add dynamic safety memory threshold calculation and emergency alert for memory spikes ([9da9b4d](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/9da9b4dae3b1d0da2620a74882c1c8d44a95e4ad))
+* enhance metrics module with cross-platform memory and CPU info retrieval, dynamic metrics registry, and improved data flushing ([e073abf](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/e073abfcd91c2d57d0d3aae4a824ac9d0928a88a))
+* rename metrics to server-telemetry across configuration, documentation, and codebase ([a0a884a](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/a0a884ac75ac8d11b0ef388bd391a82a9d5701aa))
+* update automated workflow and release configuration for improved semantic release handling ([1f83460](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/1f834607f04b84c51fc258bbd7f29997b100b0ef))
+
 ## [1.14.3](https://github.com/CoCreate-app/CoCreate-metrics/compare/v1.14.2...v1.14.3) (2026-07-14)
 
 
