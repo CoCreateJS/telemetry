@@ -26,10 +26,6 @@ import os from 'node:os';
 import Config from '@cocreate/config';
 import { getValueFromObject } from '@cocreate/utils';
 
-
-// ==============================================================================
-// Module-Level Sandbox State (ESM Singleton Container)
-// ==============================================================================
 let server = null;                  // Reference to the main CoCreateServer instance
 let activeIntervalId = null;        // Storage for the core execution loop interval
 let lastCpuInfo = null;             // Cache for the previous CPU telemetry sample
@@ -57,7 +53,6 @@ const defaults = {
     retentionDays: 0, // Default set to 0 (infinite retention, never auto-delete)
     broadcast: true
 };
-
 
 /**
  * Reads memory allocations using a local-dev fallback if Linux /proc is unavailable.
@@ -108,7 +103,6 @@ export function readMemoryInfo() {
     }
 }
 
-
 /**
  * Reads CPU performance ticks across cores natively or using fallback trackers.
  * 
@@ -144,7 +138,6 @@ export function readCpuInfo() {
     }
 }
 
-
 /**
  * Computes CPU core utilization percentages by comparing differential cycle ticks.
  * 
@@ -175,7 +168,6 @@ export function calculateCpuUsage(cpuInfo1, cpuInfo2) {
     });
 }
 
-
 /**
  * Calculates a dynamic safety memory threshold percentage based on the physical core-to-memory ratio.
  * This is symmetrically checked locally in server-telemetry.js to align the 1-second emergency loops.
@@ -197,7 +189,6 @@ function calculateDynamicSafetyThreshold() {
     // Safety clamps: Prevent calculated values from getting too extreme
     return Math.max(50, Math.min(90, maxSafePercentage));
 }
-
 
 /**
  * Dynamic Telemetry Ingestion Protocol.
@@ -221,7 +212,6 @@ export function send(component, data) {
         console.error('[@cocreate/server-telemetry] Error capturing custom telemetry transmission:', err.message);
     }
 }
-
 
 /**
  * Core execution tick. Collects system specs, appends external custom registries,
@@ -272,7 +262,6 @@ export function read() {
             rss: Math.round(processMemory.rss / 1024),
             external: Math.round(processMemory.external / 1024)
         },
-        // Symmetrically merge custom component blocks directly into the heartbeat payload
         ...customTelemetryRegistry,
         timestamp: new Date().toISOString()
     };
@@ -280,13 +269,10 @@ export function read() {
     dbBuffer.push(JSON.parse(JSON.stringify(currentTelemetry)));
 
     // --- INSTANTANEOUS 1-SECOND OOM PROTECTION CHECK ---
-    // If memory spikes above the threshold on any individual 1-second sample,
-    // fire an immediate emergency signal to the Master process.
     let targetMemoryThreshold = telemetryConfig 
         ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.scaleUpMemoryThreshold'), 10) 
         : 85;
 
-    // Apply Dynamic Safety limits to 1s emergency checks if enabled (on by default)
     const isSafetyLimitsEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== 'false';
     
     if (isSafetyLimitsEnabled) {
@@ -297,7 +283,7 @@ export function read() {
     }
 
     if (currentTelemetry.memory.percentage >= targetMemoryThreshold) {
-        const emergencyCooldown = 300000; // Throttle to maximum 1 emergency signal every 5 minutes per worker node
+        const emergencyCooldown = 300000; 
         if (Date.now() - lastEmergencyAlertTimestamp >= emergencyCooldown) {
             lastEmergencyAlertTimestamp = Date.now();
             console.warn(`[@cocreate/server-telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
@@ -309,9 +295,51 @@ export function read() {
         }
     }
 
-    // Dynamic Time-Staggering Check:
-    // All workers write their own process stats, but their flush intervals are staggered
-    // using a round-robin calculation to prevent massive write collisions.
+    // --- AUTOMATED INGRESS CORDON TRACKING (CLIENT-SIDE LOAD BALANCING) ---
+    // User-configurable limit nested inside safetyLimits, safetyOptions, or defined flat
+    const cordonMemoryThreshold = telemetryConfig 
+        ? parseInt(
+            getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonMemoryThreshold') ||
+            getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonMemoryThreshold') ||
+            getValueFromObject(telemetryConfig, 'server-telemetry.cordonMemoryThreshold'), 10
+          )
+        : 90;
+
+    const cordonCpuThreshold = telemetryConfig 
+        ? parseInt(
+            getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonCpuThreshold') ||
+            getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonCpuThreshold') ||
+            getValueFromObject(telemetryConfig, 'server-telemetry.cordonCpuThreshold'), 10
+          )
+        : 90;
+
+    const actualMemoryThreshold = isNaN(cordonMemoryThreshold) ? 90 : cordonMemoryThreshold;
+    const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 90 : cordonCpuThreshold;
+
+    const isResourceLimitBreached = currentTelemetry.memory.percentage >= actualMemoryThreshold || 
+                                     currentTelemetry.cpu.totalUsage >= actualCpuThreshold;
+    
+    const recoveryBuffer = 5;
+    const isResourceSafeToRecover = currentTelemetry.memory.percentage < (actualMemoryThreshold - recoveryBuffer) && 
+                                    currentTelemetry.cpu.totalUsage < (actualCpuThreshold - recoveryBuffer);
+
+    // Decoupled state execution: Telemetry acts as a sensor sending updates to the Server core.
+    // It relies on server.isCordon to verify if a state modification payload needs to be broadcast.
+    if (isResourceLimitBreached && !server.isCordon) {
+        server.send({
+            method: 'cordon',
+            broadcast: true,
+            active: true
+        });
+    } else if (!isResourceLimitBreached && server.isCordon && isResourceSafeToRecover) {
+        server.send({
+            method: 'cordon',
+            broadcast: true,
+            active: false
+        });
+    }
+
+    // Dynamic Time-Staggering Check
     const customWriteInterval = telemetryConfig 
         ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.writeInterval'), 10) 
         : defaults.writeInterval;
@@ -327,12 +355,9 @@ export function read() {
     return currentTelemetry;
 }
 
-
 /**
  * Processes buffered raw tick records to calculate minimum, maximum, and average values.
  * Writes aggregated results as a single document utilizing standard server.crud structures.
- * Also emits the statistical telemetry directly to the IPC loop using fail-fast server.send().
- * Cleans up outdated database telemetry if retentionDays is configured.
  */
 export async function flushTelemetryToDatabase() {
     if (dbBuffer.length === 0) {
@@ -348,7 +373,6 @@ export async function flushTelemetryToDatabase() {
         const load1m = dbBuffer.map(sample => sample.system.loadavg[0]);
         const heapUsed = dbBuffer.map(sample => sample.process.heapUsed);
 
-        // Compute statistical aggregates
         const cpuMin = Math.min(...cpuUsages);
         const cpuMax = Math.max(...cpuUsages);
         const cpuAvg = cpuUsages.reduce((sum, val) => sum + val, 0) / totalSamples;
@@ -362,7 +386,6 @@ export async function flushTelemetryToDatabase() {
 
         const lastSample = dbBuffer[totalSamples - 1];
 
-        // Gather any custom component keys injected during the current buffer window
         const componentAggregates = {};
         for (const key of Object.keys(customTelemetryRegistry)) {
             componentAggregates[key] = lastSample[key] || null;
@@ -398,24 +421,19 @@ export async function flushTelemetryToDatabase() {
                 worker_uptime: lastSample.process.uptime,
                 max_heap_kb: maxHeap
             },
-            // Save dynamic custom telemetry blocks
             custom: componentAggregates
         };
 
-        // Clear local buffer immediately to avoid execution loop overlap
         dbBuffer = [];
         lastDbFlushTimestamp = Date.now();
 
-        // 1. DISPATCH LIVE EVENT VIA SERVER SEND (FAIL-FAST)
-        // Directly fire the 'telemetry' method upstream.
-        // It should route cleanly or throw immediately.
+        // 1. DISPATCH LIVE EVENT VIA SERVER SEND
         server.send({
             method: 'telemetry',
             data: aggregatedPayload
         });
 
         // 2. WRITE HISTORICAL RECORD TO DATABASE
-        // Target standard CoCreate server storage configuration using server.crud directly
         const dbResponse = await server.crud.send({
             method: 'object.create',
             array: 'system_telemetry',
@@ -434,7 +452,6 @@ export async function flushTelemetryToDatabase() {
             const isBroadcastEnabled = broadcastConfig !== false && broadcastConfig !== 'false';
 
             if (isBroadcastEnabled) {
-                // Inject broadcast parameters onto the validated response object
                 dbResponse.broadcast = broadcastConfig;
                 server.wsManager.send(dbResponse);
             }
@@ -447,7 +464,6 @@ export async function flushTelemetryToDatabase() {
 
         const retentionDays = isNaN(configuredRetention) ? defaults.retentionDays : configuredRetention;
 
-        // Only Worker 1 handles retention pruning to prevent lock disputes
         if (retentionDays > 0 && workerId === 1) {
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
@@ -468,7 +484,6 @@ export async function flushTelemetryToDatabase() {
     }
 }
 
-
 /**
  * Returns the cached memory and system snapshot compiled during the last execution sweep.
  * 
@@ -480,15 +495,10 @@ export function get() {
 
 /**
  * Integrates server-telemetry capabilities, loads configuration, and schedules staggered execution threads.
- * Returns the functional API contract directly instead of mutating the parent server context.
- * 
- * @param {Object} serverCtx - The core instantiated server environment
- * @returns {Object} Functional API contract for the server-telemetry subsystem
  */
 export async function init(serverCtx) {
     server = serverCtx;
 
-    // Define functional API contract
     const telemetryAPI = {
         init,
         stop,
@@ -501,7 +511,6 @@ export async function init(serverCtx) {
         flushTelemetryToDatabase
     };
 
-    // Load nested telemetry parameters matching standard configuration queries
     telemetryConfig = await Config({
         'server-telemetry': ''
     });
@@ -518,16 +527,11 @@ export async function init(serverCtx) {
     
     const workerId = server.workerId;
     const totalWorkers = server.totalWorkers;
-    
-    // Staggered launch delays to prevent resource spikes during multi-worker server boots
-    const staggeredDelay = (workerId * collectionInterval) + (totalWorkers * collectionInterval);
 
     stop();
 
     lastCpuInfo = readCpuInfo();
     
-    // Mathematically offset the first write target so that worker logging phases
-    // are perfectly staggered across the write window, avoiding write overlaps!
     const phaseOffset = ((workerId - 1) / totalWorkers) * customWriteInterval;
     lastDbFlushTimestamp = Date.now() - phaseOffset;
     
@@ -546,7 +550,6 @@ export function stop() {
     }
 }
 
-// Default export matches standard functional API entry contract
 export default {
     init,
     stop,
