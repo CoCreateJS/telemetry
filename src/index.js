@@ -26,22 +26,23 @@ import os from 'node:os';
 import Config from '@cocreate/config';
 import { getValueFromObject } from '@cocreate/utils';
 
+
 // ==============================================================================
 // Module-Level Sandbox State (ESM Singleton Container)
 // ==============================================================================
-let server = null;          // Reference to the main CoCreateServer instance
-let activeIntervalId = null;    // Storage for the core execution loop interval
-let lastCpuInfo = null;         // Cache for the previous CPU metrics sample
-let metricsConfig = null;       // In-memory reference to loaded configuration map
-let dbBuffer = [];              // In-memory array to accumulate raw metric ticks
+let server = null;                  // Reference to the main CoCreateServer instance
+let activeIntervalId = null;        // Storage for the core execution loop interval
+let lastCpuInfo = null;             // Cache for the previous CPU telemetry sample
+let telemetryConfig = null;         // In-memory reference to loaded configuration map
+let dbBuffer = [];                  // In-memory array to accumulate raw telemetry ticks
 let lastDbFlushTimestamp = Date.now(); // Record of last database persistence execution
 let lastEmergencyAlertTimestamp = 0;   // Throttling lock for high-priority OOM warnings
 
-// Registry for dynamic metrics pushed by external modules (e.g. socket-mesh)
-const customMetricsRegistry = {};
+// Registry for dynamic telemetry pushed by external modules (e.g. server-mesh)
+const customTelemetryRegistry = {};
 
 // Active state snapshot populated on every poll tick
-let currentMetrics = {
+let currentTelemetry = {
     cpu: { totalUsage: 0, cores: [] },
     memory: { total: 0, available: 0, used: 0, percentage: 0 },
     system: { loadavg: [0, 0, 0], uptime: 0 },
@@ -57,11 +58,12 @@ const defaults = {
     broadcast: true
 };
 
+
 /**
  * Reads memory allocations using a local-dev fallback if Linux /proc is unavailable.
  * Supports cross-platform safety (macOS and Windows environments).
  * 
- * @returns {Object} Metric payload containing hardware-allocated details
+ * @returns {Object} Telemetry payload containing hardware-allocated details
  */
 export function readMemoryInfo() {
     try {
@@ -101,10 +103,11 @@ export function readMemoryInfo() {
             usedMemoryPercentage
         };
     } catch (err) {
-        console.error('[@cocreate/metrics] Error reading memory info:', err.message);
+        console.error('[@cocreate/server-telemetry] Error reading memory info:', err.message);
         return { totalMemory: 0, availableMemory: 0, usedMemory: 0, usedMemoryPercentage: 0 };
     }
 }
+
 
 /**
  * Reads CPU performance ticks across cores natively or using fallback trackers.
@@ -136,10 +139,11 @@ export function readCpuInfo() {
                 };
             });
     } catch (err) {
-        console.error('[@cocreate/metrics] Error reading CPU ticks:', err.message);
+        console.error('[@cocreate/server-telemetry] Error reading CPU ticks:', err.message);
         return [];
     }
 }
+
 
 /**
  * Computes CPU core utilization percentages by comparing differential cycle ticks.
@@ -171,9 +175,10 @@ export function calculateCpuUsage(cpuInfo1, cpuInfo2) {
     });
 }
 
+
 /**
  * Calculates a dynamic safety memory threshold percentage based on the physical core-to-memory ratio.
- * This is symmetrically checked locally in metrics.js to align the 1-second emergency loops.
+ * This is symmetrically checked locally in server-telemetry.js to align the 1-second emergency loops.
  * 
  * @returns {number} Calculated maximum safe memory percentage threshold (capped between 50% and 90%)
  */
@@ -193,9 +198,10 @@ function calculateDynamicSafetyThreshold() {
     return Math.max(50, Math.min(90, maxSafePercentage));
 }
 
+
 /**
- * Dynamic Metrics Ingestion Protocol.
- * Allows other platform modules (like socket-mesh.js) to push specific performance
+ * Dynamic Telemetry Ingestion Protocol.
+ * Allows other platform modules (like server-mesh.js) to push specific performance
  * stats directly to the core telemetry registry to be emitted and serialized.
  * 
  * @param {string} component - Name of the reporting component (e.g., 'mesh')
@@ -206,15 +212,16 @@ export function send(component, data) {
         return;
     }
     try {
-        customMetricsRegistry[component] = {
-            ...customMetricsRegistry[component],
+        customTelemetryRegistry[component] = {
+            ...customTelemetryRegistry[component],
             ...data,
             timestamp: new Date().toISOString()
         };
     } catch (err) {
-        console.error('[@cocreate/metrics] Error capturing custom metric transmission:', err.message);
+        console.error('[@cocreate/server-telemetry] Error capturing custom telemetry transmission:', err.message);
     }
 }
+
 
 /**
  * Core execution tick. Collects system specs, appends external custom registries,
@@ -242,8 +249,8 @@ export function read() {
 
     const processMemory = process.memoryUsage();
 
-    // Populate active metrics payload
-    currentMetrics = {
+    // Populate active server-telemetry payload
+    currentTelemetry = {
         cpu: {
             totalUsage: parseFloat(cpuTotalUsage.toFixed(2)),
             cores: coresUsage
@@ -266,21 +273,21 @@ export function read() {
             external: Math.round(processMemory.external / 1024)
         },
         // Symmetrically merge custom component blocks directly into the heartbeat payload
-        ...customMetricsRegistry,
+        ...customTelemetryRegistry,
         timestamp: new Date().toISOString()
     };
 
-    dbBuffer.push(JSON.parse(JSON.stringify(currentMetrics)));
+    dbBuffer.push(JSON.parse(JSON.stringify(currentTelemetry)));
 
     // --- INSTANTANEOUS 1-SECOND OOM PROTECTION CHECK ---
     // If memory spikes above the threshold on any individual 1-second sample,
     // fire an immediate emergency signal to the Master process.
-    let targetMemoryThreshold = metricsConfig 
-        ? parseInt(getValueFromObject(metricsConfig, 'metrics.scaleUpMemoryThreshold'), 10) 
+    let targetMemoryThreshold = telemetryConfig 
+        ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.scaleUpMemoryThreshold'), 10) 
         : 85;
 
     // Apply Dynamic Safety limits to 1s emergency checks if enabled (on by default)
-    const isSafetyLimitsEnabled = getValueFromObject(metricsConfig, 'metrics.safetyLimits') !== false && getValueFromObject(metricsConfig, 'metrics.safetyLimits') !== 'false';
+    const isSafetyLimitsEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== 'false';
     
     if (isSafetyLimitsEnabled) {
         const dynamicSafetyThreshold = calculateDynamicSafetyThreshold();
@@ -289,15 +296,15 @@ export function read() {
         }
     }
 
-    if (currentMetrics.memory.percentage >= targetMemoryThreshold) {
+    if (currentTelemetry.memory.percentage >= targetMemoryThreshold) {
         const emergencyCooldown = 300000; // Throttle to maximum 1 emergency signal every 5 minutes per worker node
         if (Date.now() - lastEmergencyAlertTimestamp >= emergencyCooldown) {
             lastEmergencyAlertTimestamp = Date.now();
-            console.warn(`[@cocreate/metrics] [EMERGENCY] Memory threshold breached on 1s tick (${currentMetrics.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
+            console.warn(`[@cocreate/server-telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
             
             server.send({
-                method: 'metric.emergency',
-                data: currentMetrics
+                method: 'telemetry.emergency',
+                data: currentTelemetry
             });
         }
     }
@@ -305,28 +312,29 @@ export function read() {
     // Dynamic Time-Staggering Check:
     // All workers write their own process stats, but their flush intervals are staggered
     // using a round-robin calculation to prevent massive write collisions.
-    const customWriteInterval = metricsConfig 
-        ? parseInt(getValueFromObject(metricsConfig, 'metrics.writeInterval'), 10) 
+    const customWriteInterval = telemetryConfig 
+        ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.writeInterval'), 10) 
         : defaults.writeInterval;
 
     const writeInterval = isNaN(customWriteInterval) ? defaults.writeInterval : customWriteInterval;
 
     if (Date.now() - lastDbFlushTimestamp >= writeInterval) {
-        flushMetricsToDatabase().catch(err => {
-            console.error('[@cocreate/metrics] Failed to flush staggered DB metrics:', err);
+        flushTelemetryToDatabase().catch(err => {
+            console.error('[@cocreate/server-telemetry] Failed to flush staggered DB telemetry:', err);
         });
     }
 
-    return currentMetrics;
+    return currentTelemetry;
 }
+
 
 /**
  * Processes buffered raw tick records to calculate minimum, maximum, and average values.
  * Writes aggregated results as a single document utilizing standard server.crud structures.
- * Also emits the statistical metrics directly to the IPC loop using fail-fast server.send().
- * Cleans up outdated database telemetry metrics if retentionDays is configured.
+ * Also emits the statistical telemetry directly to the IPC loop using fail-fast server.send().
+ * Cleans up outdated database telemetry if retentionDays is configured.
  */
-export async function flushMetricsToDatabase() {
+export async function flushTelemetryToDatabase() {
     if (dbBuffer.length === 0) {
         lastDbFlushTimestamp = Date.now();
         return;
@@ -356,7 +364,7 @@ export async function flushMetricsToDatabase() {
 
         // Gather any custom component keys injected during the current buffer window
         const componentAggregates = {};
-        for (const key of Object.keys(customMetricsRegistry)) {
+        for (const key of Object.keys(customTelemetryRegistry)) {
             componentAggregates[key] = lastSample[key] || null;
         }
 
@@ -364,7 +372,7 @@ export async function flushMetricsToDatabase() {
         const totalWorkers = server.totalWorkers;
 
         const aggregatedPayload = {
-            component: 'metrics',
+            component: 'server-telemetry',
             serverId: server.id,
             workerId: workerId,
             totalWorkers: totalWorkers,
@@ -399,10 +407,10 @@ export async function flushMetricsToDatabase() {
         lastDbFlushTimestamp = Date.now();
 
         // 1. DISPATCH LIVE EVENT VIA SERVER SEND (FAIL-FAST)
-        // Replaced workerStorage loops. Directly fire the 'metric' method upstream.
+        // Directly fire the 'telemetry' method upstream.
         // It should route cleanly or throw immediately.
         server.send({
-            method: 'metric',
+            method: 'telemetry',
             data: aggregatedPayload
         });
 
@@ -417,10 +425,10 @@ export async function flushMetricsToDatabase() {
         });
 
         if (dbResponse && dbResponse.error) {
-            console.error('[@cocreate/metrics] Database telemetry registration rejected:', dbResponse.error);
+            console.error('[@cocreate/server-telemetry] Database telemetry registration rejected:', dbResponse.error);
         } else if (dbResponse) {
-            const broadcastConfig = metricsConfig 
-                ? getValueFromObject(metricsConfig, 'metrics.broadcast')
+            const broadcastConfig = telemetryConfig 
+                ? getValueFromObject(telemetryConfig, 'server-telemetry.broadcast')
                 : defaults.broadcast;
 
             const isBroadcastEnabled = broadcastConfig !== false && broadcastConfig !== 'false';
@@ -433,8 +441,8 @@ export async function flushMetricsToDatabase() {
         }
 
         // Clean up outdated telemetry logs if configured
-        const configuredRetention = metricsConfig 
-            ? parseInt(getValueFromObject(metricsConfig, 'metrics.retentionDays'), 10) 
+        const configuredRetention = telemetryConfig 
+            ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.retentionDays'), 10) 
             : defaults.retentionDays;
 
         const retentionDays = isNaN(configuredRetention) ? defaults.retentionDays : configuredRetention;
@@ -456,9 +464,10 @@ export async function flushMetricsToDatabase() {
         }
 
     } catch (error) {
-        console.error('[@cocreate/metrics] Error executing database flush:', error.message);
+        console.error('[@cocreate/server-telemetry] Error executing database flush:', error.message);
     }
 }
+
 
 /**
  * Returns the cached memory and system snapshot compiled during the last execution sweep.
@@ -466,21 +475,21 @@ export async function flushMetricsToDatabase() {
  * @returns {Object} Active system performance telemetry snapshot
  */
 export function get() {
-    return currentMetrics;
+    return currentTelemetry;
 }
 
 /**
- * Integrates metrics capabilities, loads configuration, and schedules staggered execution threads.
+ * Integrates server-telemetry capabilities, loads configuration, and schedules staggered execution threads.
  * Returns the functional API contract directly instead of mutating the parent server context.
  * 
  * @param {Object} serverCtx - The core instantiated server environment
- * @returns {Object} Functional API contract for the metrics subsystem
+ * @returns {Object} Functional API contract for the server-telemetry subsystem
  */
 export async function init(serverCtx) {
     server = serverCtx;
 
     // Define functional API contract
-    const metricsAPI = {
+    const telemetryAPI = {
         init,
         stop,
         send,
@@ -489,23 +498,23 @@ export async function init(serverCtx) {
         readCpuInfo,
         readMemoryInfo,
         calculateCpuUsage,
-        flushMetricsToDatabase
+        flushTelemetryToDatabase
     };
 
     // Load nested telemetry parameters matching standard configuration queries
-    metricsConfig = await Config({
-        'metrics': ''
+    telemetryConfig = await Config({
+        'server-telemetry': ''
     });
 
-    const metricsEnabled = getValueFromObject(metricsConfig, 'metrics.enabled') !== false && getValueFromObject(metricsConfig, 'metrics.enabled') !== 'false';
+    const telemetryEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== 'false';
 
-    if (!metricsEnabled) {
-        console.log('[@cocreate/metrics] Monitoring is disabled by configuration.');
-        return metricsAPI;
+    if (!telemetryEnabled) {
+        console.log('[@cocreate/server-telemetry] Monitoring is disabled by configuration.');
+        return telemetryAPI;
     }
 
-    const collectionInterval = parseInt(getValueFromObject(metricsConfig, 'metrics.collectionInterval'), 10) || defaults.collectionInterval;
-    const customWriteInterval = parseInt(getValueFromObject(metricsConfig, 'metrics.writeInterval'), 10) || defaults.writeInterval;
+    const collectionInterval = parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.collectionInterval'), 10) || defaults.collectionInterval;
+    const customWriteInterval = parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.writeInterval'), 10) || defaults.writeInterval;
     
     const workerId = server.workerId;
     const totalWorkers = server.totalWorkers;
@@ -524,10 +533,10 @@ export async function init(serverCtx) {
     
     dbBuffer = [];
 
-    console.log(`[@cocreate/metrics] Starting poller on Worker ${process.pid} (Worker ID: ${workerId}/${totalWorkers}, Write Offset Phase: ${phaseOffset}ms)`);
+    console.log(`[@cocreate/server-telemetry] Starting telemetry monitoring on Worker ${process.pid} (Worker ID: ${workerId}/${totalWorkers}, Write Phase Offset: ${phaseOffset}ms)`);
     activeIntervalId = setInterval(read, collectionInterval);
 
-    return metricsAPI;
+    return telemetryAPI;
 }
 
 export function stop() {
@@ -547,5 +556,5 @@ export default {
     readCpuInfo,
     readMemoryInfo,
     calculateCpuUsage,
-    flushMetricsToDatabase
+    flushTelemetryToDatabase
 };
