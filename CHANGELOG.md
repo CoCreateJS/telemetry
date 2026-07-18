@@ -1,3 +1,10 @@
+# [1.16.0](https://github.com/CoCreate-app/CoCreate-server-telemetry/compare/v1.15.0...v1.16.0) (2026-07-18)
+
+
+### Features
+
+* streamline telemetry code by removing redundant comments and enhancing resource limit checks ([275c62c](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/275c62c52a484d743a2b84c108552839c786f243))
+
 # [1.15.0](https://github.com/CoCreate-app/CoCreate-server-telemetry/compare/v1.14.3...v1.15.0) (2026-07-17)
 
 
