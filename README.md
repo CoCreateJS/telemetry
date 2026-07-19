@@ -1,65 +1,164 @@
-# CoCreate-metrics
+# CoCreate Server Telemetry
 
-A simple metrics component in vanilla javascript. Easily configured using HTML5 data-attributes and/or JavaScript API. Take it for a spin in our [playground!](https://cocreate.app/docs/metrics)
+A high-frequency, non-blocking telemetry engine designed to monitor multi-tenant resource saturation, loop latency, and connection bandwidth consumption across clustered environments. This module streams real-time system performance insights directly into the CoCreate self-healing autoscaler ecosystem.
 
-![GitHub latest release](https://img.shields.io/github/v/release/CoCreate-app/CoCreate-metrics?style=flat-square)
-![GitHub contributors](https://img.shields.io/github/contributors/CoCreate-app/CoCreate-metrics?style=flat-square)
-![License](https://img.shields.io/static/v1?style=flat-square&label=license&message=SSPL&color=green)
-![Hiring](https://img.shields.io/static/v1?style=flat-square&label=&message=Hiring&color=blueviolet)
+---
 
-![CoCreate](https://cdn.cocreate.app/logo.png)
+## Documentation
 
-[CoCreate Docs](https://cocreate.app/docs/metrics)
+For full API references, custom performance metrics, and dashboard ingestion guides, refer to the [CoCreate Server Telemetry Documentation](https://cocreatejs.com/docs/server-telemetry).
 
-We want this library to be community-driven, and CoCreate led. We need your help to realize this goal. To help make sure we are building the right things in the right order, we ask that you create [issues](https://github.com/CoCreate-app/Realtime_Admin_CRM_and_CMS/issues) and [pull requests](https://github.com/CoCreate-app/Realtime_Admin_CRM_and_CMS/pulls) or merely upvote or comment on existing issues or pull requests.
+---
 
-We appreciate your continued support, thank you!
+## Table of Contents
 
-# Table of Contents
+* [Low-Overhead High-Frequency Telemetry Engine](#low-overhead-high-frequency-telemetry-engine)
+* [Why CoCreate Server Telemetry?](#why-cocreate-server-telemetry)
+* [The Metric Profile Plane](#the-metric-profile-plane)
+* [The Saturation Index Calculation](#the-saturation-index-calculation)
+* [Non-Blocking Multi-Threaded Streaming](#non-blocking-multi-threaded-streaming)
+* [Configuration](#configuration)
+* [Installation](#installation)
+* [Announcements](#announcements)
+* [Roadmap](#roadmap)
+* [How to Contribute](#how-to-contribute)
+* [About](#about)
 
--   [Table of Contents](#table-of-contents)
--   [Announcements](#announcements)
--   [Roadmap](#roadmap)
--   [How to Contribute](#how-to-contribute)
--   [About](#about)
--   [License](#license)
+---
 
-<a name="announcements"></a>
+## Low-Overhead High-Frequency Telemetry Engine
 
-# Announcements
+Monitoring real-time systems often introduces an instrumentation tax—where the observer itself degrades performance. `@cocreate/server-telemetry` is engineered using low-level, asynchronous polling loops to monitor internal runtime state with near-zero overhead.
 
-All updates to this library are documented in our [CHANGELOG](https://github.com/CoCreate-app/CoCreate-metrics/blob/master/CHANGELOG.md) and [releases](https://github.com/CoCreate-app/CoCreate-metrics/releases). You may also subscribe to email for releases and breaking changes.
+### Event Loop Lag Detection
 
-<a name="roadmap"></a>
+Instead of tracking abstract hypervisor data, this module monitors actual V8 thread starvation by measuring scheduling delay intervals. A precision timer schedules microtask check-ins; deviations reveal when application code is blocking the single thread.
 
-# Roadmap
+### Zero-Allocation Ring Buffers
 
-If you are interested in the future direction of this project, please take a look at our open [issues](https://github.com/CoCreate-app/CoCreate-metrics/issues) and [pull requests](https://github.com/CoCreate-app/CoCreate-metrics/pulls). We would love to hear your feedback.
+To prevent triggering V8 Garbage Collection (GC) pauses during intense data collection, all raw telemetry samples are held in pre-allocated, fixed-size typed array ring buffers in memory, ensuring consistent application execution.
 
-<a name="about"></a>
+```text
+ [Metrics Gatherer] ──► [Pre-Allocated Ring Buffer] ──► [Asynchronous Flush] ──► [Autoscaler Engine]
+                             (Zero GC Overhead)
+```
 
-# About
+---
 
-CoCreate-metrics is guided and supported by the CoCreate Developer Experience Team.
+## Why CoCreate Server Telemetry?
 
-Please Email the Developer Experience Team [here](mailto:develop@cocreate.app) in case of any queries.
+Standard infrastructure monitoring agents (like Datadog or Prometheus Node Exporter) sample system states at coarse 10 to 60-second intervals and look at machines globally. They completely miss the short, critical spikes that degrade real-time WebSocket experiences—like a single tenant executing a complex query that triggers a 500ms event loop freeze.
 
-CoCreate-metrics is maintained and funded by CoCreate. The names and logos for CoCreate are trademarks of CoCreate, LLC.
+`@cocreate/server-telemetry` isolates metrics down to the individual **Organization ID** and **Socket Connection Instance**. It calculates instant health profiles at sub-second intervals, giving the `@cocreate/server-autoscaler` the granular insight required to gracefully shed or migrate specific tenant workloads before users experience lag.
 
-<a name="contribute"></a>
+---
 
-# How to Contribute
+## The Metric Profile Plane
 
-We encourage contribution to our libraries (you might even score some nifty swag), please see our [CONTRIBUTING](https://github.com/CoCreate-app/CoCreate-metrics/blob/master/CONTRIBUTING.md) guide for details.
+The telemetry engine continually samples four primary dimensions across the cluster:
 
-<a name="license"></a>
+| Metric Group | Collection Method | Key Use Case |
+| --- | --- | --- |
+| **V8 Event Loop Lag** | Asynchronous Microtask Polling | Detects thread starvation caused by heavy computation or synchronous execution blockages. |
+| **Memory Profiles** | `process.memoryUsage.rss()` | Tracks memory growth and leaks within individual worker instances. |
+| **Socket Density** | Active Session Tracking | Measures connection volumes to protect memory limits. |
+| **Bandwidth Deltas** | Network Interface Stream Counters | Monitors tenant-isolated data rates to identify runaway processes or DDoS vectors. |
 
-# License
+---
 
-This software is dual-licensed under the GNU Affero General Public License version 3 (AGPLv3) and a commercial license.
+## The Saturation Index Calculation
 
--   **Open Source Use**: For open-source projects and non-commercial use, this software is available under the AGPLv3. The AGPLv3 allows you to freely use, modify, and distribute this software, provided that all modifications and derivative works are also licensed under the AGPLv3. For the full license text, see the [LICENSE file](https://github.com/CoCreate-app/CoCreate-metrics/blob/master/LICENSE).
+The absolute core of the CoCreate self-healing cluster is the **Saturation Index ($S_i$)**. The telemetry module calculates this value at regular 500ms intervals using a dynamic weighted linear combination:
 
--   **Commercial Use**: For-profit companies and individuals intending to use this software for commercial purposes must obtain a commercial license. The commercial license is available when you sign up for an API key on our [website](https://cocreate.app). This license permits proprietary use and modification of the software without the copyleft requirements of the AGPLv3. It is ideal for integrating this software into proprietary commercial products and applications.
+$$S_i = \alpha \cdot \left(\frac{\text{Loop Lag (ms)}}{\text{Max Lag Limit}}\right) + \beta \cdot \left(\frac{\text{RAM Used}}{\text{RAM Allocated}}\right) + \gamma \cdot \left(\frac{\text{Active Sockets}}{\text{Max Socket Capacity}}\right)$$
 
-If you have not purchased a commercial license and intend to use this software for commercial purposes, you are required to sign up for an API key on our website.
+Where the weight constants are tuned by default to prioritize thread fluidity:
+
+* $\alpha = 0.50$ (Event Loop Fluctuations)
+* $\beta = 0.30$ (Memory Saturation)
+* $\gamma = 0.20$ (Connection Density)
+
+When $S_i > 0.85$ for a consecutive duration exceeding 15 seconds, the telemetry plane fires a critical notification to the server orchestration layer to prompt a defensive horizontal scaling action.
+
+---
+
+## Non-Blocking Multi-Threaded Streaming
+
+Telemetry data shouldn't compete with application throughput. When configured to stream metrics to a central database or external timeseries sink, `@cocreate/server-telemetry` offloads data serialization work entirely.
+
+Using Node.js `worker_threads`, the main application thread offloads raw data arrays to a background thread using zero-copy `ArrayBuffer` transfers. The background worker serializes and ships the metric payload asynchronously, leaving the primary thread free to process WebSocket packets uninterrupted.
+
+---
+
+## Configuration
+
+Drop a `telemetry.config.json` into your server root directory to manage monitoring frequencies and aggregation targets.
+
+```json
+{
+  "samplingIntervalMs": 500,
+  "flushIntervalMs": 5000,
+  "retentionPeriodHours": 24,
+  "limits": {
+    "maxAllowedV8LagMs": 100,
+    "highMemoryThresholdPercent": 85
+  },
+  "streaming": {
+    "enabled": true,
+    "useWorkerThread": true,
+    "target": "cluster-registry"
+  }
+}
+```
+
+---
+
+## Installation
+
+### NPM Installation
+
+```bash
+npm i @cocreate/server-telemetry
+```
+
+### Yarn Installation
+
+```bash
+yarn add @cocreate/server-telemetry
+```
+
+---
+
+## Announcements
+
+Performance improvements, kernel tracing updates, and profiling modifications are documented on the [CoCreate Server Telemetry GitHub Releases](https://github.com/CoCreate-app/CoCreate-server-telemetry/releases) page. Subscribe to stay informed about optimization releases and new features.
+
+---
+
+## Roadmap
+
+Upcoming capabilities for our monitoring plane include:
+
+* **eBPF Network Inspections:** Low-overhead, kernel-level packet inspection to isolate network throughput anomalies down to precise system sockets.
+* **GC Execution Visualizer:** Deep tracing hooks that flag exactly which tenant code block caused V8 mark-and-sweep garbage collection freezes.
+
+---
+
+## How to Contribute
+
+We welcome pull requests targeting performance profiling, adapter additions, and bug fixes. Please read our [CONTRIBUTING.md](https://github.com/CoCreate-app/CoCreate-server-telemetry/blob/master/CONTRIBUTING.md) guide for local development workflows.
+
+If you encounter any bugs or wish to request new features, please submit an issue on our [GitHub Issues](https://github.com/CoCreate-app/CoCreate-server-telemetry/issues) tracker. We want this library to be community-driven, and CoCreate-led. We need your help to shape its future.
+
+For broader system configurations and API guides, please visit our [CoCreate Server Telemetry Documentation](https://cocreatejs.com/docs/server-telemetry).
+
+---
+
+## About
+
+`@cocreate/server-telemetry` is designed, built, and supported by the CoCreate Developer Experience Team.
+
+> [!NOTE]
+> For questions regarding telemetry pipelines, custom metric adapters, or deployment profiling, please visit our [GitHub Discussions](https://github.com/CoCreate-app/CoCreate-server-telemetry/discussions) or join our Discord community.
+
+`@cocreate/server-telemetry` is maintained and funded by CoCreate. The names and logos for CoCreate are trademarks of CoCreate, LLC.
