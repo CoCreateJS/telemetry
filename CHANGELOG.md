@@ -1,3 +1,10 @@
+## [1.16.1](https://github.com/CoCreate-app/CoCreate-server-telemetry/compare/v1.16.0...v1.16.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* set default branch to main ([ba77f46](https://github.com/CoCreate-app/CoCreate-server-telemetry/commit/ba77f46753163ce12ff82167b9848ddd8b0faf8d))
+
 # [1.16.0](https://github.com/CoCreate-app/CoCreate-server-telemetry/compare/v1.15.0...v1.16.0) (2026-07-18)
 
 
