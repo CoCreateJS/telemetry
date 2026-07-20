@@ -511,9 +511,7 @@ export async function init(serverCtx) {
         flushTelemetryToDatabase
     };
 
-    telemetryConfig = await Config({
-        'server-telemetry': ''
-    });
+    telemetryConfig = await Config.get('telemetry');
 
     const telemetryEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== 'false';
 
