@@ -26,7 +26,7 @@ import os from 'node:os';
 import Config from '@cocreate/config';
 import { getValueFromObject } from '@cocreate/utils';
 
-let server = null;                  // Reference to the main CoCreateServer instance
+let server = null;          // Reference to the main CoCreateServer instance
 let activeIntervalId = null;        // Storage for the core execution loop interval
 let lastCpuInfo = null;             // Cache for the previous CPU telemetry sample
 let telemetryConfig = null;         // In-memory reference to loaded configuration map
@@ -311,27 +311,40 @@ export function read() {
             getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonCpuThreshold') ||
             getValueFromObject(telemetryConfig, 'server-telemetry.cordonCpuThreshold'), 10
           )
-        : 90;
+        : 95;
 
     const actualMemoryThreshold = isNaN(cordonMemoryThreshold) ? 90 : cordonMemoryThreshold;
-    const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 90 : cordonCpuThreshold;
+    const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 95 : cordonCpuThreshold;
 
-    const isResourceLimitBreached = currentTelemetry.memory.percentage >= actualMemoryThreshold || 
-                                     currentTelemetry.cpu.totalUsage >= actualCpuThreshold;
+    // Memory limits are evaluated instantaneously on the 1-second loop
+    const isMemoryLimitBreached = currentTelemetry.memory.percentage >= actualMemoryThreshold;
     
     const recoveryBuffer = 5;
+    // Recovering is still active on the 1-second tick: both current CPU and Memory must be safely down
     const isResourceSafeToRecover = currentTelemetry.memory.percentage < (actualMemoryThreshold - recoveryBuffer) && 
                                     currentTelemetry.cpu.totalUsage < (actualCpuThreshold - recoveryBuffer);
 
     // Decoupled state execution: Telemetry acts as a sensor sending updates to the Server core.
-    // It relies on server.isCordon to verify if a state modification payload needs to be broadcast.
-    if (isResourceLimitBreached && !server.isCordon) {
+    if (isMemoryLimitBreached && !server.isCordon) {
+        // Detailed log displaying active memory and threshold limits when Cordon activates instantly
+        console.warn(
+            `[@cocreate/server-telemetry] [CORDON TRIGGER] Server reached instantaneous memory limit! Firing cordon to sever new connections.\n` +
+            ` » Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${actualMemoryThreshold}%)`
+        );
+
         server.send({
             method: 'cordon',
             broadcast: true,
             active: true
         });
-    } else if (!isResourceLimitBreached && server.isCordon && isResourceSafeToRecover) {
+    } else if (!isMemoryLimitBreached && server.isCordon && isResourceSafeToRecover) {
+        // Detailed log showing that the worker has settled back under safe thresholds, letting traffic back in
+        console.log(
+            `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins! Removing cordon.\n` +
+            ` » Active Memory: ${currentTelemetry.memory.percentage}% (Safe limit must be < ${actualMemoryThreshold - recoveryBuffer}%)\n` +
+            ` » Active CPU: ${currentTelemetry.cpu.totalUsage}% (Safe limit must be < ${actualCpuThreshold - recoveryBuffer}%)`
+        );
+
         server.send({
             method: 'cordon',
             broadcast: true,
@@ -376,6 +389,30 @@ export async function flushTelemetryToDatabase() {
         const cpuMin = Math.min(...cpuUsages);
         const cpuMax = Math.max(...cpuUsages);
         const cpuAvg = cpuUsages.reduce((sum, val) => sum + val, 0) / totalSamples;
+
+        // --- STAGGERED AVERAGE CPU CORDON TRACKING ---
+        const cordonCpuThreshold = telemetryConfig 
+            ? parseInt(
+                getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonCpuThreshold') ||
+                getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonCpuThreshold') ||
+                getValueFromObject(telemetryConfig, 'server-telemetry.cordonCpuThreshold'), 10
+              )
+            : 95;
+        const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 95 : cordonCpuThreshold;
+
+        // If average CPU utilization over the sample window breaches the threshold, fire cordon
+        if (cpuAvg >= actualCpuThreshold && !server.isCordon) {
+            console.warn(
+                `[@cocreate/server-telemetry] [CORDON TRIGGER - CPU AVERAGE] Server average CPU utilization over sample period breached threshold! Firing cordon to protect host.\n` +
+                ` » Average CPU (over ${totalSamples} samples): ${cpuAvg.toFixed(2)}% (Threshold: ${actualCpuThreshold}%)`
+            );
+
+            server.send({
+                method: 'cordon',
+                broadcast: true,
+                active: true
+            });
+        }
 
         const memMin = Math.min(...memUsages);
         const memMax = Math.max(...memUsages);
@@ -535,7 +572,7 @@ export async function init(serverCtx) {
     
     dbBuffer = [];
 
-    console.log(`[@cocreate/server-telemetry] Starting telemetry monitoring on Worker ${process.pid} (Worker ID: ${workerId}/${totalWorkers}, Write Phase Offset: ${phaseOffset}ms)`);
+    console.log(`[@cocreate/server-telemetry] [WORKER ${workerId}] Monitoring telemetry.`);
     activeIntervalId = setInterval(read, collectionInterval);
 
     return telemetryAPI;
