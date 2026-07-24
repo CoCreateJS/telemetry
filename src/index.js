@@ -533,8 +533,8 @@ export function get() {
 /**
  * Integrates server-telemetry capabilities, loads configuration, and schedules staggered execution threads.
  */
-export async function init(serverCtx) {
-    server = serverCtx;
+export async function init(serverInstance) {
+    server = serverInstance;
 
     const telemetryAPI = {
         init,
