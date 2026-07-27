@@ -473,14 +473,14 @@ export async function flushTelemetryToDatabase() {
         // 2. WRITE HISTORICAL RECORD TO DATABASE
         const dbResponse = await server.crud.send({
             method: 'object.create',
-            array: 'system_telemetry',
+            array: 'servers_telemetry',
             object: aggregatedPayload,
             organization_id: server.organization_id,
             host: server.host
         });
 
         if (dbResponse && dbResponse.error) {
-            console.error('[@cocreate/server-telemetry] Database telemetry registration rejected:', dbResponse.error);
+            console.error(`[@cocreate/server-telemetry] [WORKER${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
         } else if (dbResponse) {
             const broadcastConfig = telemetryConfig 
                 ? getValueFromObject(telemetryConfig, 'server-telemetry.broadcast')
@@ -507,7 +507,7 @@ export async function flushTelemetryToDatabase() {
 
             await server.crud.send({
                 method: 'object.delete',
-                array: 'system_telemetry',
+                array: 'servers_telemetry',
                 object: {
                     timestamp: { $lt: cutoffDate.toISOString() }
                 },
