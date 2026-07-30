@@ -1,6 +1,6 @@
 {
   "name": "@cocreate/server-telemetry",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "High-throughput, non-blocking dual-buffered telemetry orchestrator for CoCreate Server. Measures real-time multi-tenant bandwidth, API operation tracing, and consumption analytics without event-loop lag.",
   "keywords": [
     "cocreate",
