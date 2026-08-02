@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2023 CoCreate and Contributors.
+ * Copyright (C) 2026 CoCreate and Contributors.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -16,21 +16,16 @@
  *
  ********************************************************************************/
 
-// Commercial Licensing Information:
-// For commercial use of this software without the copyleft provisions of the AGPLv3,
-// you must obtain a commercial license from CoCreate LLC.
-// For details, visit <https://cocreate.app/licenses/> or contact us at sales@cocreate.app.
-
 import fs from 'node:fs';
 import os from 'node:os';
-import Config from '@cocreate/config';
-import { getValueFromObject } from '@cocreate/utils';
+import config from '@cocreate/config';
+import { getValueFromObject, dotNotationToObject } from '@cocreate/utils';
 
-let server = null;          // Reference to the main CoCreateServer instance
-let activeIntervalId = null;        // Storage for the core execution loop interval
-let lastCpuInfo = null;             // Cache for the previous CPU telemetry sample
-let telemetryConfig = null;         // In-memory reference to loaded configuration map
-let dbBuffer = [];                  // In-memory array to accumulate raw telemetry ticks
+let server = null;                     // Reference to the main CoCreateServer instance
+let activeIntervalId = null;           // Storage for the core execution loop interval
+let lastCpuInfo = null;                // Cache for the previous CPU telemetry sample
+let telemetryConfig = {};              // In-memory reference to loaded configuration map
+let dbBuffer = [];                     // In-memory array to accumulate raw telemetry ticks
 let lastDbFlushTimestamp = Date.now(); // Record of last database persistence execution
 let lastEmergencyAlertTimestamp = 0;   // Throttling lock for high-priority OOM warnings
 
@@ -46,7 +41,7 @@ let currentTelemetry = {
     timestamp: null
 };
 
-// Default configurations
+// Default configuration settings
 const defaults = {
     collectionInterval: 1000,
     writeInterval: 60000,
@@ -55,12 +50,42 @@ const defaults = {
 };
 
 /**
+ * Loads telemetry configuration using @cocreate/config and queries database overrides
+ * for 'telemetry' or 'server-telemetry' configurations.
+ * 
+ * @returns {Promise<Object>} Resolved telemetry configuration object
+ */
+async function loadTelemetryConfig() {
+    const sysConfig = await config.get('telemetry');
+
+    let dbConfig = null;
+    if (server && server.organization_id) {
+        dbConfig = await config.query({
+            type: 'telemetry',
+            organization_id: server.organization_id,
+            server: server.host,
+            cluster: server.cluster_id
+        });
+    }
+
+    if (sysConfig) {
+        dotNotationToObject(telemetryConfig, sysConfig);
+    }
+
+    if (dbConfig) {
+        dotNotationToObject(telemetryConfig, dbConfig);
+    }
+
+    return telemetryConfig;
+}
+
+/**
  * Reads memory allocations using a local-dev fallback if Linux /proc is unavailable.
  * Supports cross-platform safety (macOS and Windows environments).
  * 
  * @returns {Object} Telemetry payload containing hardware-allocated details
  */
-export function readMemoryInfo() {
+function readMemoryInfo() {
     try {
         if (os.platform() !== 'linux') {
             const totalMemoryBytes = os.totalmem();
@@ -108,7 +133,7 @@ export function readMemoryInfo() {
  * 
  * @returns {Array} List of CPU core tickers and time allocations
  */
-export function readCpuInfo() {
+function readCpuInfo() {
     try {
         if (os.platform() !== 'linux') {
             const cpus = os.cpus();
@@ -129,7 +154,7 @@ export function readCpuInfo() {
                 const parts = line.split(/\s+/).filter(Boolean);
                 return {
                     core: parts[0],
-                    times: parts.slice(1).map(Number),
+                    times: parts.slice(1).map(Number)
                 };
             });
     } catch (err) {
@@ -145,7 +170,7 @@ export function readCpuInfo() {
  * @param {Array} cpuInfo2 - Newly captured secondary CPU sample state
  * @returns {Array} Differential usage details per hardware core
  */
-export function calculateCpuUsage(cpuInfo1, cpuInfo2) {
+function calculateCpuUsage(cpuInfo1, cpuInfo2) {
     if (!cpuInfo1 || !cpuInfo1.length || !cpuInfo2 || !cpuInfo2.length) return [];
 
     return cpuInfo1.map((coreInfo1) => {
@@ -163,14 +188,13 @@ export function calculateCpuUsage(cpuInfo1, cpuInfo2) {
 
         return {
             core: coreInfo1.core,
-            usage: totalDiff > 0 ? Math.max(0, Math.min(100, (1 - idleDiff / totalDiff) * 100)) : 0,
+            usage: totalDiff > 0 ? Math.max(0, Math.min(100, (1 - idleDiff / totalDiff) * 100)) : 0
         };
     });
 }
 
 /**
- * Calculates a dynamic safety memory threshold percentage based on the physical core-to-memory ratio.
- * This is symmetrically checked locally in server-telemetry.js to align the 1-second emergency loops.
+ * Calculates a dynamic safety memory threshold percentage based on physical core-to-memory ratio.
  * 
  * @returns {number} Calculated maximum safe memory percentage threshold (capped between 50% and 90%)
  */
@@ -191,14 +215,12 @@ function calculateDynamicSafetyThreshold() {
 }
 
 /**
- * Dynamic Telemetry Ingestion Protocol.
- * Allows other platform modules (like server-mesh.js) to push specific performance
- * stats directly to the core telemetry registry to be emitted and serialized.
+ * Ingests custom component performance telemetry stats into the core registry.
  * 
  * @param {string} component - Name of the reporting component (e.g., 'mesh')
  * @param {Object} data - Key/Value pairs of custom tracking attributes
  */
-export function send(component, data) {
+function send(component, data) {
     if (!component || typeof component !== 'string' || !data || typeof data !== 'object') {
         return;
     }
@@ -214,10 +236,12 @@ export function send(component, data) {
 }
 
 /**
- * Core execution tick. Collects system specs, appends external custom registries,
- * and commits rolls to database buffer limits. Excludes event-emitter or callback leaks.
+ * Core telemetry collection tick. Gathers system and process performance metrics,
+ * appends custom metrics, evaluates emergency OOM / cordon limits, and buffers records.
+ * 
+ * @returns {Object} Compiled telemetry snapshot
  */
-export function read() {
+function read() {
     const memory = readMemoryInfo();
     const currentCpuInfo = readCpuInfo();
 
@@ -269,11 +293,10 @@ export function read() {
     dbBuffer.push(JSON.parse(JSON.stringify(currentTelemetry)));
 
     // --- INSTANTANEOUS 1-SECOND OOM PROTECTION CHECK ---
-    let targetMemoryThreshold = telemetryConfig 
-        ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.scaleUpMemoryThreshold'), 10) 
-        : 85;
+    let targetMemoryThreshold = parseInt(getValueFromObject(telemetryConfig, 'scaleUpMemoryThreshold'), 10) || 85;
 
-    const isSafetyLimitsEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits') !== 'false';
+    const safetyConfig = getValueFromObject(telemetryConfig, 'safetyLimits');
+    const isSafetyLimitsEnabled = safetyConfig !== false && safetyConfig !== 'false';
     
     if (isSafetyLimitsEnabled) {
         const dynamicSafetyThreshold = calculateDynamicSafetyThreshold();
@@ -288,80 +311,61 @@ export function read() {
             lastEmergencyAlertTimestamp = Date.now();
             console.warn(`[@cocreate/server-telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
             
-            server.send({
-                method: 'telemetry.emergency',
-                data: currentTelemetry
-            });
+            if (server && typeof server.send === 'function') {
+                server.send({
+                    method: 'telemetry.emergency',
+                    data: currentTelemetry
+                });
+            }
         }
     }
 
     // --- AUTOMATED INGRESS CORDON TRACKING (CLIENT-SIDE LOAD BALANCING) ---
-    // User-configurable limit nested inside safetyLimits, safetyOptions, or defined flat
-    const cordonMemoryThreshold = telemetryConfig 
-        ? parseInt(
-            getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonMemoryThreshold') ||
-            getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonMemoryThreshold') ||
-            getValueFromObject(telemetryConfig, 'server-telemetry.cordonMemoryThreshold'), 10
-          )
-        : 90;
+    const cordonMemoryThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonMemoryThreshold'), 10) || 90;
+    const cordonCpuThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonCpuThreshold'), 10) || 95;
 
-    const cordonCpuThreshold = telemetryConfig 
-        ? parseInt(
-            getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonCpuThreshold') ||
-            getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonCpuThreshold') ||
-            getValueFromObject(telemetryConfig, 'server-telemetry.cordonCpuThreshold'), 10
-          )
-        : 95;
-
-    const actualMemoryThreshold = isNaN(cordonMemoryThreshold) ? 90 : cordonMemoryThreshold;
-    const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 95 : cordonCpuThreshold;
-
-    // Memory limits are evaluated instantaneously on the 1-second loop
-    const isMemoryLimitBreached = currentTelemetry.memory.percentage >= actualMemoryThreshold;
-    
+    const isMemoryLimitBreached = currentTelemetry.memory.percentage >= cordonMemoryThreshold;
     const recoveryBuffer = 5;
-    // Recovering is still active on the 1-second tick: both current CPU and Memory must be safely down
-    const isResourceSafeToRecover = currentTelemetry.memory.percentage < (actualMemoryThreshold - recoveryBuffer) && 
-                                    currentTelemetry.cpu.totalUsage < (actualCpuThreshold - recoveryBuffer);
+    
+    const isResourceSafeToRecover = currentTelemetry.memory.percentage < (cordonMemoryThreshold - recoveryBuffer) && 
+                                    currentTelemetry.cpu.totalUsage < (cordonCpuThreshold - recoveryBuffer);
 
-    // Decoupled state execution: Telemetry acts as a sensor sending updates to the Server core.
-    if (isMemoryLimitBreached && !server.isCordon) {
-        // Detailed log displaying active memory and threshold limits when Cordon activates instantly
-        console.warn(
-            `[@cocreate/server-telemetry] [CORDON TRIGGER] Server reached instantaneous memory limit! Firing cordon to sever new connections.\n` +
-            ` » Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${actualMemoryThreshold}%)`
-        );
+    if (server) {
+        if (isMemoryLimitBreached && !server.isCordon) {
+            console.warn(
+                `[@cocreate/server-telemetry] [CORDON TRIGGER] Server reached instantaneous memory limit! Firing cordon to sever new connections.\n` +
+                ` » Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${cordonMemoryThreshold}%)`
+            );
 
-        server.send({
-            method: 'cordon',
-            broadcast: true,
-            active: true
-        });
-    } else if (!isMemoryLimitBreached && server.isCordon && isResourceSafeToRecover) {
-        // Detailed log showing that the worker has settled back under safe thresholds, letting traffic back in
-        console.log(
-            `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins! Removing cordon.\n` +
-            ` » Active Memory: ${currentTelemetry.memory.percentage}% (Safe limit must be < ${actualMemoryThreshold - recoveryBuffer}%)\n` +
-            ` » Active CPU: ${currentTelemetry.cpu.totalUsage}% (Safe limit must be < ${actualCpuThreshold - recoveryBuffer}%)`
-        );
+            if (typeof server.send === 'function') {
+                server.send({
+                    method: 'cordon',
+                    broadcast: true,
+                    active: true
+                });
+            }
+        } else if (!isMemoryLimitBreached && server.isCordon && isResourceSafeToRecover) {
+            console.log(
+                `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins! Removing cordon.\n` +
+                ` » Active Memory: ${currentTelemetry.memory.percentage}% (Safe limit must be < ${cordonMemoryThreshold - recoveryBuffer}%)\n` +
+                ` » Active CPU: ${currentTelemetry.cpu.totalUsage}% (Safe limit must be < ${cordonCpuThreshold - recoveryBuffer}%)`
+            );
 
-        server.send({
-            method: 'cordon',
-            broadcast: true,
-            active: false
-        });
+            if (typeof server.send === 'function') {
+                server.send({
+                    method: 'cordon',
+                    broadcast: true,
+                    active: false
+                });
+            }
+        }
     }
 
-    // Dynamic Time-Staggering Check
-    const customWriteInterval = telemetryConfig 
-        ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.writeInterval'), 10) 
-        : defaults.writeInterval;
-
-    const writeInterval = isNaN(customWriteInterval) ? defaults.writeInterval : customWriteInterval;
+    const writeInterval = parseInt(getValueFromObject(telemetryConfig, 'writeInterval'), 10) || defaults.writeInterval;
 
     if (Date.now() - lastDbFlushTimestamp >= writeInterval) {
-        flushTelemetryToDatabase().catch(err => {
-            console.error('[@cocreate/server-telemetry] Failed to flush staggered DB telemetry:', err);
+        save().catch(err => {
+            console.error('[@cocreate/server-telemetry] Failed to save telemetry to DB:', err);
         });
     }
 
@@ -372,7 +376,7 @@ export function read() {
  * Processes buffered raw tick records to calculate minimum, maximum, and average values.
  * Writes aggregated results as a single document utilizing standard server.crud structures.
  */
-export async function flushTelemetryToDatabase() {
+async function save() {
     if (dbBuffer.length === 0) {
         lastDbFlushTimestamp = Date.now();
         return;
@@ -391,27 +395,21 @@ export async function flushTelemetryToDatabase() {
         const cpuAvg = cpuUsages.reduce((sum, val) => sum + val, 0) / totalSamples;
 
         // --- STAGGERED AVERAGE CPU CORDON TRACKING ---
-        const cordonCpuThreshold = telemetryConfig 
-            ? parseInt(
-                getValueFromObject(telemetryConfig, 'server-telemetry.safetyLimits.cordonCpuThreshold') ||
-                getValueFromObject(telemetryConfig, 'server-telemetry.safetyOptions.cordonCpuThreshold') ||
-                getValueFromObject(telemetryConfig, 'server-telemetry.cordonCpuThreshold'), 10
-              )
-            : 95;
-        const actualCpuThreshold = isNaN(cordonCpuThreshold) ? 95 : cordonCpuThreshold;
+        const cordonCpuThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonCpuThreshold'), 10) || 95;
 
-        // If average CPU utilization over the sample window breaches the threshold, fire cordon
-        if (cpuAvg >= actualCpuThreshold && !server.isCordon) {
+        if (cpuAvg >= cordonCpuThreshold && server && !server.isCordon) {
             console.warn(
                 `[@cocreate/server-telemetry] [CORDON TRIGGER - CPU AVERAGE] Server average CPU utilization over sample period breached threshold! Firing cordon to protect host.\n` +
-                ` » Average CPU (over ${totalSamples} samples): ${cpuAvg.toFixed(2)}% (Threshold: ${actualCpuThreshold}%)`
+                ` » Average CPU (over ${totalSamples} samples): ${cpuAvg.toFixed(2)}% (Threshold: ${cordonCpuThreshold}%)`
             );
 
-            server.send({
-                method: 'cordon',
-                broadcast: true,
-                active: true
-            });
+            if (typeof server.send === 'function') {
+                server.send({
+                    method: 'cordon',
+                    broadcast: true,
+                    active: true
+                });
+            }
         }
 
         const memMin = Math.min(...memUsages);
@@ -428,12 +426,12 @@ export async function flushTelemetryToDatabase() {
             componentAggregates[key] = lastSample[key] || null;
         }
 
-        const workerId = server.workerId;
-        const totalWorkers = server.totalWorkers;
+        const workerId = server?.workerId || 1;
+        const totalWorkers = server?.totalWorkers || 1;
 
         const aggregatedPayload = {
             component: 'server-telemetry',
-            serverId: server.id,
+            serverId: server?.id,
             workerId: workerId,
             totalWorkers: totalWorkers,
             timestamp: new Date().toISOString(),
@@ -465,43 +463,41 @@ export async function flushTelemetryToDatabase() {
         lastDbFlushTimestamp = Date.now();
 
         // 1. DISPATCH LIVE EVENT VIA SERVER SEND
-        server.send({
-            method: 'telemetry',
-            data: aggregatedPayload
-        });
+        if (server && typeof server.send === 'function') {
+            server.send({
+                method: 'telemetry',
+                data: aggregatedPayload
+            });
+        }
 
         // 2. WRITE HISTORICAL RECORD TO DATABASE
-        const dbResponse = await server.crud.send({
-            method: 'object.create',
-            array: 'servers_telemetry',
-            object: aggregatedPayload,
-            organization_id: server.organization_id,
-            host: server.host
-        });
+        if (server?.crud) {
+            const dbResponse = await server.crud.send({
+                method: 'object.create',
+                array: 'servers_telemetry',
+                object: aggregatedPayload,
+                organization_id: server.organization_id,
+                host: server.host
+            });
 
-        if (dbResponse && dbResponse.error) {
-            console.error(`[@cocreate/server-telemetry] [WORKER${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
-        } else if (dbResponse) {
-            const broadcastConfig = telemetryConfig 
-                ? getValueFromObject(telemetryConfig, 'server-telemetry.broadcast')
-                : defaults.broadcast;
+            if (dbResponse && dbResponse.error) {
+                console.error(`[@cocreate/server-telemetry] [WORKER ${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
+            } else if (dbResponse) {
+                const broadcastConfig = getValueFromObject(telemetryConfig, 'broadcast');
+                const isBroadcastEnabled = broadcastConfig !== false && broadcastConfig !== 'false';
 
-            const isBroadcastEnabled = broadcastConfig !== false && broadcastConfig !== 'false';
-
-            if (isBroadcastEnabled) {
-                dbResponse.broadcast = broadcastConfig;
-                server.wsManager.send(dbResponse);
+                if (isBroadcastEnabled && server.wsManager) {
+                    dbResponse.broadcast = broadcastConfig;
+                    server.wsManager.send(dbResponse);
+                }
             }
         }
 
         // Clean up outdated telemetry logs if configured
-        const configuredRetention = telemetryConfig 
-            ? parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.retentionDays'), 10) 
-            : defaults.retentionDays;
+        const parsedRetention = parseInt(getValueFromObject(telemetryConfig, 'retentionDays'), 10);
+        const retentionDays = isNaN(parsedRetention) ? defaults.retentionDays : parsedRetention;
 
-        const retentionDays = isNaN(configuredRetention) ? defaults.retentionDays : configuredRetention;
-
-        if (retentionDays > 0 && workerId === 1) {
+        if (retentionDays > 0 && workerId === 1 && server?.crud) {
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
@@ -526,45 +522,20 @@ export async function flushTelemetryToDatabase() {
  * 
  * @returns {Object} Active system performance telemetry snapshot
  */
-export function get() {
+function get() {
     return currentTelemetry;
 }
 
 /**
- * Integrates server-telemetry capabilities, loads configuration, and schedules staggered execution threads.
+ * Starts active telemetry collection intervals.
  */
-export async function init(serverInstance) {
-    server = serverInstance;
-
-    const telemetryAPI = {
-        init,
-        stop,
-        send,
-        get,
-        read,
-        readCpuInfo,
-        readMemoryInfo,
-        calculateCpuUsage,
-        flushTelemetryToDatabase
-    };
-
-    telemetryConfig = await Config.get('telemetry');
-
-    const telemetryEnabled = getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== false && getValueFromObject(telemetryConfig, 'server-telemetry.enabled') !== 'false';
-
-    if (!telemetryEnabled) {
-        console.log('[@cocreate/server-telemetry] Monitoring is disabled by configuration.');
-        return telemetryAPI;
-    }
-
-    const collectionInterval = parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.collectionInterval'), 10) || defaults.collectionInterval;
-    const customWriteInterval = parseInt(getValueFromObject(telemetryConfig, 'server-telemetry.writeInterval'), 10) || defaults.writeInterval;
-    
-    const workerId = server.workerId;
-    const totalWorkers = server.totalWorkers;
+function start() {
+    const collectionInterval = parseInt(getValueFromObject(telemetryConfig, 'collectionInterval'), 10) || defaults.collectionInterval;
+    const customWriteInterval = parseInt(getValueFromObject(telemetryConfig, 'writeInterval'), 10) || defaults.writeInterval;
+    const workerId = server?.workerId || 1;
+    const totalWorkers = server?.totalWorkers || 1;
 
     stop();
-
     lastCpuInfo = readCpuInfo();
     
     const phaseOffset = ((workerId - 1) / totalWorkers) * customWriteInterval;
@@ -574,25 +545,51 @@ export async function init(serverInstance) {
 
     console.log(`[@cocreate/server-telemetry] [WORKER ${workerId}] Monitoring telemetry.`);
     activeIntervalId = setInterval(read, collectionInterval);
-
-    return telemetryAPI;
 }
 
-export function stop() {
+/**
+ * Stops active telemetry collection intervals.
+ */
+function stop() {
     if (activeIntervalId) {
         clearInterval(activeIntervalId);
         activeIntervalId = null;
     }
 }
 
+/**
+ * Initializes the TelemetryManager service and starts polling timers.
+ * 
+ * @param {Object} serverInstance - Core server instance
+ * @returns {Promise<Object>} Telemetry service public interface
+ */
+async function init(serverInstance) {
+    server = serverInstance;
+
+    await loadTelemetryConfig();
+
+    const telemetryEnabled = getValueFromObject(telemetryConfig, 'enabled') !== false &&
+                             getValueFromObject(telemetryConfig, 'enabled') !== 'false';
+
+    if (telemetryEnabled) {
+        start();
+    } else {        
+        console.log('[@cocreate/server-telemetry] Monitoring is disabled.');
+    }
+
+    return {
+        config: telemetryConfig,
+        start,
+        stop,
+        send,
+        get,
+        read,
+        save,
+        readCpuInfo,
+        readMemoryInfo
+    };
+}
+
 export default {
-    init,
-    stop,
-    send,
-    get,
-    read,
-    readCpuInfo,
-    readMemoryInfo,
-    calculateCpuUsage,
-    flushTelemetryToDatabase
+    init
 };
