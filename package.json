@@ -22,7 +22,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CoCreate-app/CoCreate-server-telemetry.git"
+    "url": "git+https://gitlab.com/cocreatejs/CoCreate-server-telemetry.git"
   },
   "author": "CoCreate LLC",
   "license": "AGPL-3.0",
