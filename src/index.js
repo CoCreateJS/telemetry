@@ -45,8 +45,7 @@ let currentTelemetry = {
 const defaults = {
     collectionInterval: 1000,
     writeInterval: 60000,
-    retentionDays: 0, // Default set to 0 (infinite retention, never auto-delete)
-    broadcast: true
+    retentionDays: 0 // Default set to 0 (infinite retention, never auto-delete)
 };
 
 /**
@@ -201,15 +200,15 @@ function calculateCpuUsage(cpuInfo1, cpuInfo2) {
 function calculateDynamicSafetyThreshold() {
     const coresCount = os.cpus().length;
     const totalMemoryMb = os.totalmem() / 1024 / 1024;
-    
+
     const allocationRatePerCoreMs = 15; // Estimated peak allocation speed in MB/sec under sustained load
     const bootWindowSeconds = 60;      // Boot delay window for new instances
-    
+
     const requiredHeadroomMb = coresCount * allocationRatePerCoreMs * bootWindowSeconds;
     const headroomPercentage = (requiredHeadroomMb / totalMemoryMb) * 100;
-    
+
     const maxSafePercentage = Math.round(100 - headroomPercentage);
-    
+
     // Safety clamps: Prevent calculated values from getting too extreme
     return Math.max(50, Math.min(90, maxSafePercentage));
 }
@@ -253,7 +252,7 @@ function read() {
         if (coresUsage.length > 0) {
             const detailedCores = coresUsage.filter(c => c.core !== 'cpu');
             const targetSet = detailedCores.length > 0 ? detailedCores : coresUsage;
-            
+
             const totalSum = targetSet.reduce((sum, core) => sum + core.usage, 0);
             cpuTotalUsage = totalSum / targetSet.length;
         }
@@ -297,7 +296,7 @@ function read() {
 
     const safetyConfig = getValueFromObject(telemetryConfig, 'safetyLimits');
     const isSafetyLimitsEnabled = safetyConfig !== false && safetyConfig !== 'false';
-    
+
     if (isSafetyLimitsEnabled) {
         const dynamicSafetyThreshold = calculateDynamicSafetyThreshold();
         if (targetMemoryThreshold > dynamicSafetyThreshold) {
@@ -306,11 +305,11 @@ function read() {
     }
 
     if (currentTelemetry.memory.percentage >= targetMemoryThreshold) {
-        const emergencyCooldown = 300000; 
+        const emergencyCooldown = 300000;
         if (Date.now() - lastEmergencyAlertTimestamp >= emergencyCooldown) {
             lastEmergencyAlertTimestamp = Date.now();
             console.warn(`[@cocreate/server-telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
-            
+
             if (server && typeof server.send === 'function') {
                 server.send({
                     method: 'telemetry.emergency',
@@ -326,36 +325,32 @@ function read() {
 
     const isMemoryLimitBreached = currentTelemetry.memory.percentage >= cordonMemoryThreshold;
     const recoveryBuffer = 5;
-    
-    const isResourceSafeToRecover = currentTelemetry.memory.percentage < (cordonMemoryThreshold - recoveryBuffer) && 
-                                    currentTelemetry.cpu.totalUsage < (cordonCpuThreshold - recoveryBuffer);
+
+    const isResourceSafeToRecover = currentTelemetry.memory.percentage < (cordonMemoryThreshold - recoveryBuffer) &&
+        currentTelemetry.cpu.totalUsage < (cordonCpuThreshold - recoveryBuffer);
 
     if (server) {
-        if (isMemoryLimitBreached && !server.isCordon) {
+        if (isMemoryLimitBreached && !server.state?.isCordon) {
             console.warn(
                 `[@cocreate/server-telemetry] [CORDON TRIGGER] Server reached instantaneous memory limit! Firing cordon to sever new connections.\n` +
                 ` » Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${cordonMemoryThreshold}%)`
             );
 
-            if (typeof server.send === 'function') {
-                server.send({
-                    method: 'cordon',
-                    broadcast: true,
-                    active: true
+            if (typeof server.state?.cordon === 'function') {
+                void server.state.cordon(true).catch((error) => {
+                    console.error('[@cocreate/server-telemetry] Failed to cordon worker:', error.message);
                 });
             }
-        } else if (!isMemoryLimitBreached && server.isCordon && isResourceSafeToRecover) {
+        } else if (!isMemoryLimitBreached && server.state?.isCordon && isResourceSafeToRecover) {
             console.log(
                 `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins! Removing cordon.\n` +
                 ` » Active Memory: ${currentTelemetry.memory.percentage}% (Safe limit must be < ${cordonMemoryThreshold - recoveryBuffer}%)\n` +
                 ` » Active CPU: ${currentTelemetry.cpu.totalUsage}% (Safe limit must be < ${cordonCpuThreshold - recoveryBuffer}%)`
             );
 
-            if (typeof server.send === 'function') {
-                server.send({
-                    method: 'cordon',
-                    broadcast: true,
-                    active: false
+            if (typeof server.state?.cordon === 'function') {
+                void server.state.cordon(false).catch((error) => {
+                    console.error('[@cocreate/server-telemetry] Failed to uncordon worker:', error.message);
                 });
             }
         }
@@ -384,7 +379,7 @@ async function save() {
 
     try {
         const totalSamples = dbBuffer.length;
-        
+
         const cpuUsages = dbBuffer.map(sample => sample.cpu.totalUsage);
         const memUsages = dbBuffer.map(sample => sample.memory.percentage);
         const load1m = dbBuffer.map(sample => sample.system.loadavg[0]);
@@ -397,18 +392,14 @@ async function save() {
         // --- STAGGERED AVERAGE CPU CORDON TRACKING ---
         const cordonCpuThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonCpuThreshold'), 10) || 95;
 
-        if (cpuAvg >= cordonCpuThreshold && server && !server.isCordon) {
+        if (cpuAvg >= cordonCpuThreshold && server && !server.state?.isCordon) {
             console.warn(
                 `[@cocreate/server-telemetry] [CORDON TRIGGER - CPU AVERAGE] Server average CPU utilization over sample period breached threshold! Firing cordon to protect host.\n` +
                 ` » Average CPU (over ${totalSamples} samples): ${cpuAvg.toFixed(2)}% (Threshold: ${cordonCpuThreshold}%)`
             );
 
-            if (typeof server.send === 'function') {
-                server.send({
-                    method: 'cordon',
-                    broadcast: true,
-                    active: true
-                });
+            if (typeof server.state?.cordon === 'function') {
+                await server.state.cordon(true);
             }
         }
 
@@ -483,13 +474,7 @@ async function save() {
             if (dbResponse && dbResponse.error) {
                 console.error(`[@cocreate/server-telemetry] [WORKER ${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
             } else if (dbResponse) {
-                const broadcastConfig = getValueFromObject(telemetryConfig, 'broadcast');
-                const isBroadcastEnabled = broadcastConfig !== false && broadcastConfig !== 'false';
-
-                if (isBroadcastEnabled && server.wsManager) {
-                    dbResponse.broadcast = broadcastConfig;
-                    server.wsManager.send(dbResponse);
-                }
+                server.wsManager.send(dbResponse);
             }
         }
 
@@ -537,10 +522,10 @@ function start() {
 
     stop();
     lastCpuInfo = readCpuInfo();
-    
+
     const phaseOffset = ((workerId - 1) / totalWorkers) * customWriteInterval;
     lastDbFlushTimestamp = Date.now() - phaseOffset;
-    
+
     dbBuffer = [];
 
     console.log(`[@cocreate/server-telemetry] [WORKER ${workerId}] Monitoring telemetry.`);
@@ -569,11 +554,11 @@ async function init(serverInstance) {
     await loadTelemetryConfig();
 
     const telemetryEnabled = getValueFromObject(telemetryConfig, 'enabled') !== false &&
-                             getValueFromObject(telemetryConfig, 'enabled') !== 'false';
+        getValueFromObject(telemetryConfig, 'enabled') !== 'false';
 
     if (telemetryEnabled) {
         start();
-    } else {        
+    } else {
         console.log('[@cocreate/server-telemetry] Monitoring is disabled.');
     }
 
