@@ -38,10 +38,10 @@ It does not broadcast the cordon through `server.send()`. The worker state manag
 
 A worker is cordoned when either:
 
-- Host memory reaches `safetyLimits.cordonMemoryThreshold` during a collection tick.
+- Host memory reaches `safetyLimits.cordonMemoryThreshold` during a collection tick when no optional memory thresholds are configured.
 - Average host CPU reaches `safetyLimits.cordonCpuThreshold` during an aggregation interval.
 
-The worker is uncordoned when both memory and CPU fall at least five percentage points below their respective cordon thresholds. A worker cannot be uncordoned while it is shedding, draining, or shutting down.
+Optional memory thresholds can be added under `safetyLimits`. When any are configured, telemetry checks the current sample on each collection tick and requires the RAM threshold and every configured optional memory threshold to be met together. These safety checks are immediate; persisted min/max/average values are for analysis and do not delay cordoning. CPU remains an independent cordon trigger using its aggregation-interval average. Recovery from a combined memory cordon occurs when any combined memory metric falls at least five percentage points below its threshold and current CPU is at least five points below its threshold. A worker cannot be uncordoned while it is shedding, draining, or shutting down.
 
 ### Emergency scaling signal
 
@@ -61,7 +61,11 @@ Configuration is loaded through `@cocreate/config` using the `telemetry` key. Or
         scaleUpMemoryThreshold: 85,
         safetyLimits: {
             cordonMemoryThreshold: 90,
-            cordonCpuThreshold: 95
+            cordonCpuThreshold: 95,
+            cordonSwapThreshold: 50,
+            cordonUnreclaimableThreshold: 10,
+            cordonMlockedThreshold: 5,
+            cordonMemoryPressureThreshold: 10
         }
     }
 }
@@ -77,6 +81,10 @@ Configuration is loaded through `@cocreate/config` using the `telemetry` key. Or
 | `safetyLimits` | enabled | Set to `false` to disable dynamic adjustment of the emergency memory threshold. |
 | `safetyLimits.cordonMemoryThreshold` | `90` | Memory percentage that cordons the local worker. |
 | `safetyLimits.cordonCpuThreshold` | `95` | Average CPU percentage that cordons the local worker. |
+| `safetyLimits.cordonSwapThreshold` | unset | Optional current swap-used percentage; when set, joins RAM as a required combined cordon condition. |
+| `safetyLimits.cordonUnreclaimableThreshold` | unset | Optional current `Unevictable` memory as a percentage of physical RAM; includes `Mlocked`. |
+| `safetyLimits.cordonMlockedThreshold` | unset | Optional current `Mlocked` memory as a percentage of physical RAM. This is a subset of `Unevictable`. |
+| `safetyLimits.cordonMemoryPressureThreshold` | unset | Optional current Linux PSI `some.avg10` percentage. |
 
 ## Usage
 
@@ -100,6 +108,9 @@ The initialized service exposes:
 | `send(component, data)` | Adds or updates custom metrics for a component. |
 | `readCpuInfo()` | Reads the raw CPU tick snapshot. |
 | `readMemoryInfo()` | Reads current host memory information. |
+| `readSwapInfo()` | Reads Linux swap capacity and use. Other platforms report swap as unavailable. |
+| `readUnreclaimableInfo()` | Reads Linux `Unevictable` and `Mlocked` memory counters. |
+| `readMemoryPressureInfo()` | Reads Linux memory PSI stall metrics when the kernel exposes them. |
 
 Other server components can contribute metrics without writing directly to the telemetry collection:
 
@@ -111,6 +122,10 @@ server.telemetry.send("mesh", {
 ```
 
 The latest registered values for each component are included in subsequent samples and aggregate records.
+
+Each telemetry snapshot and persisted aggregate includes a separate `swap` object with total, available, and used capacity in KiB, plus interval min/max/average values and swap utilization percentages. On Linux, these values come from `/proc/meminfo`; when swap is disabled, percentage fields are `null` so zero swap use is not confused with an available swap cushion.
+
+The `unreclaimable` object records `Unevictable` and `Mlocked` memory in KiB, with interval min/max/average values. `Mlocked` is a subset of `Unevictable`; do not add the two values together. The `memoryPressure` object records Linux PSI `some` and `full` stall percentages for the kernel's 10-, 60-, and 300-second windows, plus cumulative stall time in microseconds. Persisted records include interval min/max/average values for each rolling PSI percentage. Optional safety thresholds can use current swap, unreclaimable memory, mlocked memory, and PSI alongside RAM to cordon a worker immediately; interval aggregates are persisted for later analysis.
 
 ## Installation
 

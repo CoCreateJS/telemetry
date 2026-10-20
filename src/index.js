@@ -36,6 +36,13 @@ const customTelemetryRegistry = {};
 let currentTelemetry = {
     cpu: { totalUsage: 0, cores: [] },
     memory: { total: 0, available: 0, used: 0, percentage: 0 },
+    swap: { total: 0, available: 0, used: 0, percentage: null, enabled: false },
+    unreclaimable: { unevictable_kb: null, mlocked_kb: null },
+    memoryPressure: {
+        supported: false,
+        some: { avg10_pct: null, avg60_pct: null, avg300_pct: null, total_us: null },
+        full: { avg10_pct: null, avg60_pct: null, avg300_pct: null, total_us: null }
+    },
     system: { loadavg: [0, 0, 0], uptime: 0 },
     process: { uptime: 0, heapTotal: 0, heapUsed: 0, rss: 0, external: 0 },
     timestamp: null
@@ -84,7 +91,16 @@ async function loadTelemetryConfig() {
  * 
  * @returns {Object} Telemetry payload containing hardware-allocated details
  */
-function readMemoryInfo() {
+function readLinuxMemInfo() {
+    const content = fs.readFileSync('/proc/meminfo', 'utf8');
+    return content.split('\n').reduce((info, line) => {
+        const parts = line.split(':');
+        if (parts.length === 2) info[parts[0].trim()] = parts[1].trim();
+        return info;
+    }, {});
+}
+
+function readMemoryInfo(linuxMemInfo = null) {
     try {
         if (os.platform() !== 'linux') {
             const totalMemoryBytes = os.totalmem();
@@ -100,15 +116,7 @@ function readMemoryInfo() {
             };
         }
 
-        const memInfoContent = fs.readFileSync('/proc/meminfo', 'utf8');
-        const memInfoLines = memInfoContent.split('\n');
-        const memInfo = memInfoLines.reduce((info, line) => {
-            const parts = line.split(':');
-            if (parts.length === 2) {
-                info[parts[0].trim()] = parts[1].trim();
-            }
-            return info;
-        }, {});
+        const memInfo = linuxMemInfo || readLinuxMemInfo();
 
         const totalMemory = parseInt(memInfo['MemTotal'], 10);
         const availableMemory = parseInt(memInfo['MemAvailable'] || memInfo['MemFree'], 10);
@@ -125,6 +133,169 @@ function readMemoryInfo() {
         console.error('[@cocreate/server-telemetry] Error reading memory info:', err.message);
         return { totalMemory: 0, availableMemory: 0, usedMemory: 0, usedMemoryPercentage: 0 };
     }
+}
+
+/** Reads Linux swap capacity and current use from /proc/meminfo. */
+function readSwapInfo(linuxMemInfo = null) {
+    if (os.platform() !== 'linux') {
+        return { total: null, available: null, used: null, percentage: null, enabled: false };
+    }
+
+    try {
+        const memInfo = linuxMemInfo || readLinuxMemInfo();
+        const total = Number.parseInt(memInfo.SwapTotal, 10) || 0;
+        const available = Number.parseInt(memInfo.SwapFree, 10) || 0;
+        const used = Math.max(0, total - available);
+
+        return {
+            total,
+            available,
+            used,
+            percentage: total > 0 ? (used / total) * 100 : null,
+            enabled: total > 0
+        };
+    } catch (error) {
+        console.error('[@cocreate/server-telemetry] Error reading swap info:', error.message);
+        return { total: null, available: null, used: null, percentage: null, enabled: false };
+    }
+}
+
+/** Reads unreclaimable Linux memory counters. Mlocked is a subset of Unevictable. */
+function readUnreclaimableInfo(linuxMemInfo = null) {
+    if (os.platform() !== 'linux') {
+        return { unevictable_kb: null, mlocked_kb: null };
+    }
+
+    try {
+        const memInfo = linuxMemInfo || readLinuxMemInfo();
+        const parseKb = key => Number.parseInt(memInfo[key], 10);
+        return {
+            unevictable_kb: Number.isFinite(parseKb('Unevictable')) ? parseKb('Unevictable') : null,
+            mlocked_kb: Number.isFinite(parseKb('Mlocked')) ? parseKb('Mlocked') : null
+        };
+    } catch (error) {
+        console.error('[@cocreate/server-telemetry] Error reading unreclaimable memory info:', error.message);
+        return { unevictable_kb: null, mlocked_kb: null };
+    }
+}
+
+/** Reads Linux memory PSI rolling stall percentages and cumulative stall time. */
+function readMemoryPressureInfo() {
+    const empty = {
+        supported: false,
+        some: { avg10_pct: null, avg60_pct: null, avg300_pct: null, total_us: null },
+        full: { avg10_pct: null, avg60_pct: null, avg300_pct: null, total_us: null }
+    };
+    if (os.platform() !== 'linux') return empty;
+
+    try {
+        const lines = fs.readFileSync('/proc/pressure/memory', 'utf8').trim().split('\n');
+        const pressure = { ...empty, supported: true };
+        for (const line of lines) {
+            const [kind, ...fields] = line.trim().split(/\s+/);
+            if (!['some', 'full'].includes(kind)) continue;
+            const values = Object.fromEntries(fields.map(field => field.split('=')));
+            pressure[kind] = {
+                avg10_pct: Number.parseFloat(values.avg10),
+                avg60_pct: Number.parseFloat(values.avg60),
+                avg300_pct: Number.parseFloat(values.avg300),
+                total_us: Number.parseInt(values.total, 10)
+            };
+        }
+        return pressure;
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            console.error('[@cocreate/server-telemetry] Error reading memory pressure info:', error.message);
+        }
+        return empty;
+    }
+}
+
+function aggregateMetric(values) {
+    const finiteValues = values.filter(Number.isFinite);
+    if (!finiteValues.length) return { min: null, max: null, avg: null };
+    return {
+        min: Math.min(...finiteValues),
+        max: Math.max(...finiteValues),
+        avg: finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length
+    };
+}
+
+function roundMetric(value) {
+    return Number.isFinite(value) ? parseFloat(value.toFixed(2)) : null;
+}
+
+function getConfiguredThreshold(path) {
+    const value = getValueFromObject(telemetryConfig, path);
+    if (value === undefined || value === null || value === '') return null;
+    const threshold = Number.parseFloat(value);
+    return Number.isFinite(threshold) ? threshold : null;
+}
+
+function getCordonThresholds() {
+    const memoryThreshold = getConfiguredThreshold('safetyLimits.cordonMemoryThreshold');
+    const cpuThreshold = getConfiguredThreshold('safetyLimits.cordonCpuThreshold');
+    const optional = {
+        swap: getConfiguredThreshold('safetyLimits.cordonSwapThreshold'),
+        unreclaimable: getConfiguredThreshold('safetyLimits.cordonUnreclaimableThreshold'),
+        mlocked: getConfiguredThreshold('safetyLimits.cordonMlockedThreshold'),
+        memoryPressure: getConfiguredThreshold('safetyLimits.cordonMemoryPressureThreshold')
+    };
+
+    return {
+        memory: memoryThreshold === null ? 90 : memoryThreshold,
+        cpu: cpuThreshold === null ? 95 : cpuThreshold,
+        optional,
+        combined: Object.values(optional).some(value => value !== null)
+    };
+}
+
+function cordonConditions(sample, thresholds) {
+    const conditions = [{
+        name: 'memory',
+        value: sample.memory?.percentage,
+        threshold: thresholds.memory
+    }];
+    if (thresholds.optional.swap !== null) conditions.push({
+        name: 'swap',
+        value: sample.swap?.percentage,
+        threshold: thresholds.optional.swap
+    });
+    if (thresholds.optional.unreclaimable !== null) conditions.push({
+        name: 'unreclaimable',
+        value: Number(sample.memory?.total) > 0 && Number.isFinite(sample.unreclaimable?.unevictable_kb)
+            ? (sample.unreclaimable.unevictable_kb / sample.memory.total) * 100
+            : null,
+        threshold: thresholds.optional.unreclaimable
+    });
+    if (thresholds.optional.mlocked !== null) conditions.push({
+        name: 'mlocked',
+        value: Number(sample.memory?.total) > 0 && Number.isFinite(sample.unreclaimable?.mlocked_kb)
+            ? (sample.unreclaimable.mlocked_kb / sample.memory.total) * 100
+            : null,
+        threshold: thresholds.optional.mlocked
+    });
+    if (thresholds.optional.memoryPressure !== null) conditions.push({
+        name: 'memoryPressure',
+        value: sample.memoryPressure?.some?.avg10_pct,
+        threshold: thresholds.optional.memoryPressure
+    });
+    return conditions;
+}
+
+function evaluateThresholds(conditions, thresholdOffset = 0) {
+    const results = conditions.map(condition => ({
+        ...condition,
+        value: condition.value
+    }));
+    return {
+        results,
+        allAtOrAbove: results.every(condition => Number.isFinite(condition.value) &&
+            condition.value >= condition.threshold + thresholdOffset),
+        anyBelow: results.some(condition => Number.isFinite(condition.value) &&
+            condition.value < condition.threshold + thresholdOffset),
+        allAvailable: results.every(condition => Number.isFinite(condition.value))
+    };
 }
 
 /**
@@ -241,7 +412,18 @@ function send(component, data) {
  * @returns {Object} Compiled telemetry snapshot
  */
 function read() {
-    const memory = readMemoryInfo();
+    let linuxMemInfo = null;
+    if (os.platform() === 'linux') {
+        try {
+            linuxMemInfo = readLinuxMemInfo();
+        } catch (error) {
+            console.error('[@cocreate/server-telemetry] Error reading Linux memory info:', error.message);
+        }
+    }
+    const memory = readMemoryInfo(linuxMemInfo);
+    const swap = readSwapInfo(linuxMemInfo);
+    const unreclaimable = readUnreclaimableInfo(linuxMemInfo);
+    const memoryPressure = readMemoryPressureInfo();
     const currentCpuInfo = readCpuInfo();
 
     let cpuTotalUsage = 0;
@@ -274,6 +456,12 @@ function read() {
             used: memory.usedMemory,
             percentage: parseFloat(memory.usedMemoryPercentage.toFixed(2))
         },
+        swap: {
+            ...swap,
+            percentage: Number.isFinite(swap.percentage) ? parseFloat(swap.percentage.toFixed(2)) : null
+        },
+        unreclaimable,
+        memoryPressure,
         system: {
             loadavg: os.loadavg(),
             uptime: Math.round(os.uptime())
@@ -320,10 +508,16 @@ function read() {
     }
 
     // --- AUTOMATED INGRESS CORDON TRACKING (CLIENT-SIDE LOAD BALANCING) ---
-    const cordonMemoryThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonMemoryThreshold'), 10) || 90;
-    const cordonCpuThreshold = parseInt(getValueFromObject(telemetryConfig, 'safetyLimits.cordonCpuThreshold'), 10) || 95;
+    const cordonThresholds = getCordonThresholds();
+    const cordonMemoryThreshold = cordonThresholds.memory;
+    const cordonCpuThreshold = cordonThresholds.cpu;
 
-    const isMemoryLimitBreached = currentTelemetry.memory.percentage >= cordonMemoryThreshold;
+    const memoryConditions = cordonConditions(currentTelemetry, cordonThresholds);
+    const memoryTrigger = evaluateThresholds(memoryConditions);
+    const memoryRecovery = evaluateThresholds(memoryConditions, -5);
+    const isMemoryLimitBreached = !cordonThresholds.combined
+        ? currentTelemetry.memory.percentage >= cordonMemoryThreshold
+        : memoryTrigger.allAvailable && memoryTrigger.allAtOrAbove;
     const recoveryBuffer = 5;
 
     const isResourceSafeToRecover = currentTelemetry.memory.percentage < (cordonMemoryThreshold - recoveryBuffer) &&
@@ -331,9 +525,14 @@ function read() {
 
     if (server) {
         if (isMemoryLimitBreached && !server.state?.isCordon) {
+            const details = cordonThresholds.combined
+                ? memoryTrigger.results.map(item =>
+                    `${item.name}=${item.value.toFixed(2)}% (threshold ${item.threshold}%)`
+                ).join(', ')
+                : `Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${cordonMemoryThreshold}%)`;
             console.warn(
-                `[@cocreate/server-telemetry] [CORDON TRIGGER] Server reached instantaneous memory limit! Firing cordon to sever new connections.\n` +
-                ` » Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${cordonMemoryThreshold}%)`
+                `[@cocreate/server-telemetry] [CORDON TRIGGER - INSTANTANEOUS MEMORY SAFETY] ` +
+                `Server reached its configured memory safety limits. Firing cordon to sever new connections.\n » ${details}`
             );
 
             if (typeof server.state?.cordon === 'function') {
@@ -341,11 +540,12 @@ function read() {
                     console.error('[@cocreate/server-telemetry] Failed to cordon worker:', error.message);
                 });
             }
-        } else if (!isMemoryLimitBreached && server.state?.isCordon && isResourceSafeToRecover) {
+        } else if (server.state?.isCordon && (cordonThresholds.combined
+            ? memoryRecovery.allAvailable && memoryRecovery.anyBelow &&
+                currentTelemetry.cpu.totalUsage < (cordonCpuThreshold - recoveryBuffer)
+            : !isMemoryLimitBreached && isResourceSafeToRecover)) {
             console.log(
-                `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins! Removing cordon.\n` +
-                ` » Active Memory: ${currentTelemetry.memory.percentage}% (Safe limit must be < ${cordonMemoryThreshold - recoveryBuffer}%)\n` +
-                ` » Active CPU: ${currentTelemetry.cpu.totalUsage}% (Safe limit must be < ${cordonCpuThreshold - recoveryBuffer}%)`
+                `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins. Removing cordon.`
             );
 
             if (typeof server.state?.cordon === 'function') {
@@ -382,6 +582,20 @@ async function save() {
 
         const cpuUsages = dbBuffer.map(sample => sample.cpu.totalUsage);
         const memUsages = dbBuffer.map(sample => sample.memory.percentage);
+        const swapUsages = dbBuffer.map(sample => sample.swap?.percentage).filter(Number.isFinite);
+        const swapAvailable = aggregateMetric(dbBuffer.map(sample => sample.swap?.available));
+        const swapUsed = aggregateMetric(dbBuffer.map(sample => sample.swap?.used));
+        const unevictable = aggregateMetric(dbBuffer.map(sample => sample.unreclaimable?.unevictable_kb));
+        const mlocked = aggregateMetric(dbBuffer.map(sample => sample.unreclaimable?.mlocked_kb));
+        const memoryPressureStats = {};
+        for (const level of ['some', 'full']) {
+            memoryPressureStats[level] = {};
+            for (const window of ['avg10_pct', 'avg60_pct', 'avg300_pct']) {
+                memoryPressureStats[level][window] = aggregateMetric(
+                    dbBuffer.map(sample => sample.memoryPressure?.[level]?.[window])
+                );
+            }
+        }
         const load1m = dbBuffer.map(sample => sample.system.loadavg[0]);
         const heapUsed = dbBuffer.map(sample => sample.process.heapUsed);
 
@@ -406,6 +620,11 @@ async function save() {
         const memMin = Math.min(...memUsages);
         const memMax = Math.max(...memUsages);
         const memAvg = memUsages.reduce((sum, val) => sum + val, 0) / totalSamples;
+        const swapMin = swapUsages.length ? Math.min(...swapUsages) : null;
+        const swapMax = swapUsages.length ? Math.max(...swapUsages) : null;
+        const swapAvg = swapUsages.length
+            ? swapUsages.reduce((sum, val) => sum + val, 0) / swapUsages.length
+            : null;
 
         const loadAvg1m = load1m.reduce((sum, val) => sum + val, 0) / totalSamples;
         const maxHeap = Math.max(...heapUsed);
@@ -438,6 +657,58 @@ async function save() {
                 min_used_pct: parseFloat(memMin.toFixed(2)),
                 max_used_pct: parseFloat(memMax.toFixed(2)),
                 avg_used_pct: parseFloat(memAvg.toFixed(2))
+            },
+            swap: {
+                total_kb: lastSample.swap.total,
+                available_kb: lastSample.swap.available,
+                used_kb: lastSample.swap.used,
+                enabled: lastSample.swap.enabled,
+                min_available_kb: swapAvailable.min,
+                max_available_kb: swapAvailable.max,
+                avg_available_kb: roundMetric(swapAvailable.avg),
+                min_used_kb: swapUsed.min,
+                max_used_kb: swapUsed.max,
+                avg_used_kb: roundMetric(swapUsed.avg),
+                min_used_pct: swapMin === null ? null : parseFloat(swapMin.toFixed(2)),
+                max_used_pct: swapMax === null ? null : parseFloat(swapMax.toFixed(2)),
+                avg_used_pct: swapAvg === null ? null : parseFloat(swapAvg.toFixed(2))
+            },
+            unreclaimable: {
+                unevictable_kb: lastSample.unreclaimable.unevictable_kb,
+                mlocked_kb: lastSample.unreclaimable.mlocked_kb,
+                unevictable_min_kb: unevictable.min,
+                unevictable_max_kb: unevictable.max,
+                unevictable_avg_kb: roundMetric(unevictable.avg),
+                mlocked_min_kb: mlocked.min,
+                mlocked_max_kb: mlocked.max,
+                mlocked_avg_kb: roundMetric(mlocked.avg)
+            },
+            memoryPressure: {
+                supported: lastSample.memoryPressure.supported,
+                some: {
+                    ...lastSample.memoryPressure.some,
+                    avg10_min_pct: roundMetric(memoryPressureStats.some.avg10_pct.min),
+                    avg10_max_pct: roundMetric(memoryPressureStats.some.avg10_pct.max),
+                    avg10_avg_pct: roundMetric(memoryPressureStats.some.avg10_pct.avg),
+                    avg60_min_pct: roundMetric(memoryPressureStats.some.avg60_pct.min),
+                    avg60_max_pct: roundMetric(memoryPressureStats.some.avg60_pct.max),
+                    avg60_avg_pct: roundMetric(memoryPressureStats.some.avg60_pct.avg),
+                    avg300_min_pct: roundMetric(memoryPressureStats.some.avg300_pct.min),
+                    avg300_max_pct: roundMetric(memoryPressureStats.some.avg300_pct.max),
+                    avg300_avg_pct: roundMetric(memoryPressureStats.some.avg300_pct.avg)
+                },
+                full: {
+                    ...lastSample.memoryPressure.full,
+                    avg10_min_pct: roundMetric(memoryPressureStats.full.avg10_pct.min),
+                    avg10_max_pct: roundMetric(memoryPressureStats.full.avg10_pct.max),
+                    avg10_avg_pct: roundMetric(memoryPressureStats.full.avg10_pct.avg),
+                    avg60_min_pct: roundMetric(memoryPressureStats.full.avg60_pct.min),
+                    avg60_max_pct: roundMetric(memoryPressureStats.full.avg60_pct.max),
+                    avg60_avg_pct: roundMetric(memoryPressureStats.full.avg60_pct.avg),
+                    avg300_min_pct: roundMetric(memoryPressureStats.full.avg300_pct.min),
+                    avg300_max_pct: roundMetric(memoryPressureStats.full.avg300_pct.max),
+                    avg300_avg_pct: roundMetric(memoryPressureStats.full.avg300_pct.avg)
+                }
             },
             system: {
                 loadavg_1m_avg: parseFloat(loadAvg1m.toFixed(2)),
@@ -571,7 +842,10 @@ async function init(serverInstance) {
         read,
         save,
         readCpuInfo,
-        readMemoryInfo
+        readMemoryInfo,
+        readSwapInfo,
+        readUnreclaimableInfo,
+        readMemoryPressureInfo
     };
 }
 
