@@ -42,9 +42,9 @@
   "author": "CoCreate LLC",
   "license": "AGPL-3.0",
   "bugs": {
-    "url": "https://github.com/CoCreate-app/CoCreate-server-telemetry/issues"
+    "url": "https://github.com/CoCreateJS/CoCreate-server-telemetry/issues"
   },
-  "homepage": "https://cocreate.app/docs/CoCreate-server-telemetry",
+  "homepage": "https://CoCreateJS.com/docs/CoCreate-server-telemetry",
   "scripts": {
     "demo": "PORT=5000 node demo/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
