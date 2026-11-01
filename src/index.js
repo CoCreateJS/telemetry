@@ -58,8 +58,10 @@ const defaults = {
 /**
  * Loads telemetry configuration using @cocreate/config and queries database overrides
  * for 'telemetry' or 'server-telemetry' configurations.
- * 
+ *
  * @returns {Promise<Object>} Resolved telemetry configuration object
+ * @private
+ * @environment server
  */
 async function loadTelemetryConfig() {
     const sysConfig = await config.get('telemetry');
@@ -88,8 +90,10 @@ async function loadTelemetryConfig() {
 /**
  * Reads memory allocations using a local-dev fallback if Linux /proc is unavailable.
  * Supports cross-platform safety (macOS and Windows environments).
- * 
+ *
  * @returns {Object} Telemetry payload containing hardware-allocated details
+ * @private
+ * @environment server
  */
 function readLinuxMemInfo() {
     const content = fs.readFileSync('/proc/meminfo', 'utf8');
@@ -135,7 +139,9 @@ function readMemoryInfo(linuxMemInfo = null) {
     }
 }
 
-/** Reads Linux swap capacity and current use from /proc/meminfo. */
+/** Reads Linux swap capacity and current use from /proc/meminfo.  * @private
+ * @environment server
+ */
 function readSwapInfo(linuxMemInfo = null) {
     if (os.platform() !== 'linux') {
         return { total: null, available: null, used: null, percentage: null, enabled: false };
@@ -160,7 +166,9 @@ function readSwapInfo(linuxMemInfo = null) {
     }
 }
 
-/** Reads unreclaimable Linux memory counters. Mlocked is a subset of Unevictable. */
+/** Reads unreclaimable Linux memory counters. Mlocked is a subset of Unevictable.  * @private
+ * @environment server
+ */
 function readUnreclaimableInfo(linuxMemInfo = null) {
     if (os.platform() !== 'linux') {
         return { unevictable_kb: null, mlocked_kb: null };
@@ -179,7 +187,9 @@ function readUnreclaimableInfo(linuxMemInfo = null) {
     }
 }
 
-/** Reads Linux memory PSI rolling stall percentages and cumulative stall time. */
+/** Reads Linux memory PSI rolling stall percentages and cumulative stall time.  * @private
+ * @environment server
+ */
 function readMemoryPressureInfo() {
     const empty = {
         supported: false,
@@ -300,8 +310,10 @@ function evaluateThresholds(conditions, thresholdOffset = 0) {
 
 /**
  * Reads CPU performance ticks across cores natively or using fallback trackers.
- * 
+ *
  * @returns {Array} List of CPU core tickers and time allocations
+ * @private
+ * @environment server
  */
 function readCpuInfo() {
     try {
@@ -335,10 +347,12 @@ function readCpuInfo() {
 
 /**
  * Computes CPU core utilization percentages by comparing differential cycle ticks.
- * 
+ *
  * @param {Array} cpuInfo1 - First historical CPU sample state
  * @param {Array} cpuInfo2 - Newly captured secondary CPU sample state
  * @returns {Array} Differential usage details per hardware core
+ * @private
+ * @environment server
  */
 function calculateCpuUsage(cpuInfo1, cpuInfo2) {
     if (!cpuInfo1 || !cpuInfo1.length || !cpuInfo2 || !cpuInfo2.length) return [];
@@ -365,8 +379,10 @@ function calculateCpuUsage(cpuInfo1, cpuInfo2) {
 
 /**
  * Calculates a dynamic safety memory threshold percentage based on physical core-to-memory ratio.
- * 
+ *
  * @returns {number} Calculated maximum safe memory percentage threshold (capped between 50% and 90%)
+ * @private
+ * @environment server
  */
 function calculateDynamicSafetyThreshold() {
     const coresCount = os.cpus().length;
@@ -386,9 +402,11 @@ function calculateDynamicSafetyThreshold() {
 
 /**
  * Ingests custom component performance telemetry stats into the core registry.
- * 
+ *
  * @param {string} component - Name of the reporting component (e.g., 'mesh')
  * @param {Object} data - Key/Value pairs of custom tracking attributes
+ * @private
+ * @environment server
  */
 function send(component, data) {
     if (!component || typeof component !== 'string' || !data || typeof data !== 'object') {
@@ -408,8 +426,10 @@ function send(component, data) {
 /**
  * Core telemetry collection tick. Gathers system and process performance metrics,
  * appends custom metrics, evaluates emergency OOM / cordon limits, and buffers records.
- * 
+ *
  * @returns {Object} Compiled telemetry snapshot
+ * @private
+ * @environment server
  */
 function read() {
     let linuxMemInfo = null;
@@ -570,6 +590,8 @@ function read() {
 /**
  * Processes buffered raw tick records to calculate minimum, maximum, and average values.
  * Writes aggregated results as a single document utilizing standard server.crud structures.
+ * @private
+ * @environment server
  */
 async function save() {
     if (dbBuffer.length === 0) {
@@ -775,8 +797,10 @@ async function save() {
 
 /**
  * Returns the cached memory and system snapshot compiled during the last execution sweep.
- * 
+ *
  * @returns {Object} Active system performance telemetry snapshot
+ * @private
+ * @environment server
  */
 function get() {
     return currentTelemetry;
@@ -784,6 +808,8 @@ function get() {
 
 /**
  * Starts active telemetry collection intervals.
+ * @private
+ * @environment server
  */
 function start() {
     const collectionInterval = parseInt(getValueFromObject(telemetryConfig, 'collectionInterval'), 10) || defaults.collectionInterval;
@@ -805,6 +831,8 @@ function start() {
 
 /**
  * Stops active telemetry collection intervals.
+ * @private
+ * @environment server
  */
 function stop() {
     if (activeIntervalId) {
@@ -815,9 +843,11 @@ function stop() {
 
 /**
  * Initializes the TelemetryManager service and starts polling timers.
- * 
+ *
  * @param {Object} serverInstance - Core server instance
  * @returns {Promise<Object>} Telemetry service public interface
+ * @public
+ * @environment server
  */
 async function init(serverInstance) {
     server = serverInstance;
@@ -852,3 +882,10 @@ async function init(serverInstance) {
 export default {
     init
 };
+
+/**
+ * High-throughput, non-blocking dual-buffered telemetry orchestrator for CoCreate Server. Measures real-time multi-tenant bandwidth, API operation tracing, and consumption analytics without event-loop lag.
+ *
+ * @module server-telemetry
+ * @environment server
+ */
