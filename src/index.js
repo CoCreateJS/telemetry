@@ -57,7 +57,7 @@ const defaults = {
 
 /**
  * Loads telemetry configuration using @cocreate/config and queries database overrides
- * for 'telemetry' or 'server-telemetry' configurations.
+ * for 'telemetry' or 'telemetry' configurations.
  *
  * @returns {Promise<Object>} Resolved telemetry configuration object
  * @private
@@ -134,7 +134,7 @@ function readMemoryInfo(linuxMemInfo = null) {
             usedMemoryPercentage
         };
     } catch (err) {
-        console.error('[@cocreate/server-telemetry] Error reading memory info:', err.message);
+        console.error('[@cocreate/telemetry] Error reading memory info:', err.message);
         return { totalMemory: 0, availableMemory: 0, usedMemory: 0, usedMemoryPercentage: 0 };
     }
 }
@@ -161,7 +161,7 @@ function readSwapInfo(linuxMemInfo = null) {
             enabled: total > 0
         };
     } catch (error) {
-        console.error('[@cocreate/server-telemetry] Error reading swap info:', error.message);
+        console.error('[@cocreate/telemetry] Error reading swap info:', error.message);
         return { total: null, available: null, used: null, percentage: null, enabled: false };
     }
 }
@@ -182,7 +182,7 @@ function readUnreclaimableInfo(linuxMemInfo = null) {
             mlocked_kb: Number.isFinite(parseKb('Mlocked')) ? parseKb('Mlocked') : null
         };
     } catch (error) {
-        console.error('[@cocreate/server-telemetry] Error reading unreclaimable memory info:', error.message);
+        console.error('[@cocreate/telemetry] Error reading unreclaimable memory info:', error.message);
         return { unevictable_kb: null, mlocked_kb: null };
     }
 }
@@ -215,7 +215,7 @@ function readMemoryPressureInfo() {
         return pressure;
     } catch (error) {
         if (error.code !== 'ENOENT') {
-            console.error('[@cocreate/server-telemetry] Error reading memory pressure info:', error.message);
+            console.error('[@cocreate/telemetry] Error reading memory pressure info:', error.message);
         }
         return empty;
     }
@@ -340,7 +340,7 @@ function readCpuInfo() {
                 };
             });
     } catch (err) {
-        console.error('[@cocreate/server-telemetry] Error reading CPU ticks:', err.message);
+        console.error('[@cocreate/telemetry] Error reading CPU ticks:', err.message);
         return [];
     }
 }
@@ -419,7 +419,7 @@ function send(component, data) {
             timestamp: new Date().toISOString()
         };
     } catch (err) {
-        console.error('[@cocreate/server-telemetry] Error capturing custom telemetry transmission:', err.message);
+        console.error('[@cocreate/telemetry] Error capturing custom telemetry transmission:', err.message);
     }
 }
 
@@ -437,7 +437,7 @@ function read() {
         try {
             linuxMemInfo = readLinuxMemInfo();
         } catch (error) {
-            console.error('[@cocreate/server-telemetry] Error reading Linux memory info:', error.message);
+            console.error('[@cocreate/telemetry] Error reading Linux memory info:', error.message);
         }
     }
     const memory = readMemoryInfo(linuxMemInfo);
@@ -464,7 +464,7 @@ function read() {
 
     const processMemory = process.memoryUsage();
 
-    // Populate active server-telemetry payload
+    // Populate active telemetry payload
     currentTelemetry = {
         cpu: {
             totalUsage: parseFloat(cpuTotalUsage.toFixed(2)),
@@ -516,7 +516,7 @@ function read() {
         const emergencyCooldown = 300000;
         if (Date.now() - lastEmergencyAlertTimestamp >= emergencyCooldown) {
             lastEmergencyAlertTimestamp = Date.now();
-            console.warn(`[@cocreate/server-telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
+            console.warn(`[@cocreate/telemetry] [EMERGENCY] Memory threshold breached on 1s tick (${currentTelemetry.memory.percentage}% >= ${targetMemoryThreshold}%). Dispatching direct system-up scaling alarm!`);
 
             if (server && typeof server.send === 'function') {
                 server.send({
@@ -551,13 +551,13 @@ function read() {
                 ).join(', ')
                 : `Active Memory: ${currentTelemetry.memory.percentage}% (Threshold: ${cordonMemoryThreshold}%)`;
             console.warn(
-                `[@cocreate/server-telemetry] [CORDON TRIGGER - INSTANTANEOUS MEMORY SAFETY] ` +
+                `[@cocreate/telemetry] [CORDON TRIGGER - INSTANTANEOUS MEMORY SAFETY] ` +
                 `Server reached its configured memory safety limits. Firing cordon to sever new connections.\n » ${details}`
             );
 
             if (typeof server.state?.cordon === 'function') {
                 void server.state.cordon(true).catch((error) => {
-                    console.error('[@cocreate/server-telemetry] Failed to cordon worker:', error.message);
+                    console.error('[@cocreate/telemetry] Failed to cordon worker:', error.message);
                 });
             }
         } else if (server.state?.isCordon && (cordonThresholds.combined
@@ -565,12 +565,12 @@ function read() {
                 currentTelemetry.cpu.totalUsage < (cordonCpuThreshold - recoveryBuffer)
             : !isMemoryLimitBreached && isResourceSafeToRecover)) {
             console.log(
-                `[@cocreate/server-telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins. Removing cordon.`
+                `[@cocreate/telemetry] [CORDON RECOVERY] Server has recovered to safe operational margins. Removing cordon.`
             );
 
             if (typeof server.state?.cordon === 'function') {
                 void server.state.cordon(false).catch((error) => {
-                    console.error('[@cocreate/server-telemetry] Failed to uncordon worker:', error.message);
+                    console.error('[@cocreate/telemetry] Failed to uncordon worker:', error.message);
                 });
             }
         }
@@ -580,7 +580,7 @@ function read() {
 
     if (Date.now() - lastDbFlushTimestamp >= writeInterval) {
         save().catch(err => {
-            console.error('[@cocreate/server-telemetry] Failed to save telemetry to DB:', err);
+            console.error('[@cocreate/telemetry] Failed to save telemetry to DB:', err);
         });
     }
 
@@ -630,7 +630,7 @@ async function save() {
 
         if (cpuAvg >= cordonCpuThreshold && server && !server.state?.isCordon) {
             console.warn(
-                `[@cocreate/server-telemetry] [CORDON TRIGGER - CPU AVERAGE] Server average CPU utilization over sample period breached threshold! Firing cordon to protect host.\n` +
+                `[@cocreate/telemetry] [CORDON TRIGGER - CPU AVERAGE] Server average CPU utilization over sample period breached threshold! Firing cordon to protect host.\n` +
                 ` » Average CPU (over ${totalSamples} samples): ${cpuAvg.toFixed(2)}% (Threshold: ${cordonCpuThreshold}%)`
             );
 
@@ -662,7 +662,7 @@ async function save() {
         const totalWorkers = server?.totalWorkers || 1;
 
         const aggregatedPayload = {
-            component: 'server-telemetry',
+            component: 'telemetry',
             serverId: server?.id,
             workerId: workerId,
             totalWorkers: totalWorkers,
@@ -765,7 +765,7 @@ async function save() {
             });
 
             if (dbResponse && dbResponse.error) {
-                console.error(`[@cocreate/server-telemetry] [WORKER ${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
+                console.error(`[@cocreate/telemetry] [WORKER ${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
             } else if (dbResponse) {
                 server.wsManager.send(dbResponse);
             }
@@ -791,7 +791,7 @@ async function save() {
         }
 
     } catch (error) {
-        console.error('[@cocreate/server-telemetry] Error executing database flush:', error.message);
+        console.error('[@cocreate/telemetry] Error executing database flush:', error.message);
     }
 }
 
@@ -825,7 +825,7 @@ function start() {
 
     dbBuffer = [];
 
-    console.log(`[@cocreate/server-telemetry] [WORKER ${workerId}] Monitoring telemetry.`);
+    console.log(`[@cocreate/telemetry] [WORKER ${workerId}] Monitoring telemetry.`);
     activeIntervalId = setInterval(read, collectionInterval);
 }
 
@@ -860,7 +860,7 @@ async function init(serverInstance) {
     if (telemetryEnabled) {
         start();
     } else {
-        console.log('[@cocreate/server-telemetry] Monitoring is disabled.');
+        console.log('[@cocreate/telemetry] Monitoring is disabled.');
     }
 
     return {
@@ -886,6 +886,6 @@ export default {
 /**
  * High-throughput, non-blocking dual-buffered telemetry orchestrator for CoCreate Server. Measures real-time multi-tenant bandwidth, API operation tracing, and consumption analytics without event-loop lag.
  *
- * @module server-telemetry
+ * @module telemetry
  * @environment server
  */

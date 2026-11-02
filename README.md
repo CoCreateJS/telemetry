@@ -1,6 +1,6 @@
 # CoCreate Server Telemetry
 
-`@cocreate/server-telemetry` samples host and process health from each CoCreate Server worker, aggregates the samples, stores historical telemetry, and protects overloaded workers by cordoning them locally.
+`@cocreate/telemetry` samples host and process health from each CoCreate Server worker, aggregates the samples, stores historical telemetry, and protects overloaded workers by cordoning them locally.
 
 ## What it measures
 
@@ -91,7 +91,7 @@ Configuration is loaded through `@cocreate/config` using the `telemetry` key. Or
 CoCreate Server initializes the module with its server instance:
 
 ```js
-import ServerTelemetry from "@cocreate/server-telemetry";
+import ServerTelemetry from "@cocreate/telemetry";
 
 const telemetry = await ServerTelemetry.init(server);
 ```
@@ -130,13 +130,13 @@ The `unreclaimable` object records `Unevictable` and `Mlocked` memory in KiB, wi
 ## Installation
 
 ```bash
-npm install @cocreate/server-telemetry
+npm install @cocreate/telemetry
 ```
 
 or:
 
 ```bash
-yarn add @cocreate/server-telemetry
+yarn add @cocreate/telemetry
 ```
 
 ## License

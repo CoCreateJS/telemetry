@@ -1,5 +1,5 @@
 {
-  "name": "@cocreate/server-telemetry",
+  "name": "@cocreate/telemetry",
   "version": "1.22.0",
   "description": "High-throughput, non-blocking dual-buffered telemetry orchestrator for CoCreate Server. Measures real-time multi-tenant bandwidth, API operation tracing, and consumption analytics without event-loop lag.",
   "keywords": [
@@ -22,14 +22,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cocreatejs/CoCreate-server-telemetry.git"
+    "url": "git+https://github.com/CoCreateJS/telemetry.git"
   },
   "author": "CoCreate LLC",
   "license": "AGPL-3.0",
   "bugs": {
-    "url": "https://github.com/CoCreateJS/CoCreate-server-telemetry/issues"
+    "url": "https://github.com/CoCreateJS/telemetry/issues"
   },
-  "homepage": "https://CoCreateJS.com/docs/CoCreate-server-telemetry",
+  "homepage": "https://CoCreateJS.com/docs/telemetry",
   "scripts": {
     "demo": "PORT=5000 node demo/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
