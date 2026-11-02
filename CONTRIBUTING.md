@@ -1,19 +1,19 @@
 # Contributing to CoCreate-metrics
 
-This project is work of [many contributors](https://github.com/CoCreateJS/CoCreate-metrics/graphs/contributors).
-You're encouraged to submit [pull requests](https://github.com/CoCreateJS/CoCreate-metrics/pulls),
-[propose features and discuss issues](https://github.com/CoCreateJS/CoCreate-metrics/issues).
+This project is work of [many contributors](https://github.com/CoCreateJS/metrics/graphs/contributors).
+You're encouraged to submit [pull requests](https://github.com/CoCreateJS/metrics/pulls),
+[propose features and discuss issues](https://github.com/CoCreateJS/metrics/issues).
 
 In the examples below, substitute your Github username for `contributor` in URLs.
 
 ## Fork the Project
 
-Fork the [project on Github](https://github.com/CoCreateJS/CoCreate-metrics) and check out your copy.
+Fork the [project on Github](https://github.com/CoCreateJS/metrics) and check out your copy.
 
 ```
 git clone https://github.com/contributor/CoCreate-metrics.git
 cd CoCreate-metrics
-git remote add upstream https://github.com/cocreatejs/CoCreate-metrics.git
+git remote add upstream https://github.com/CoCreateJS/metrics.git
 ```
 
 ## Create a Topic Branch
@@ -74,7 +74,7 @@ git push origin my-feature-branch
 
 ## Make a Pull Request
 
-Go to [https://github.com/CoCreateJS/CoCreate-metrics](https://github.com/CoCreateJS/CoCreate-metrics) and select your feature branch.
+Go to [https://github.com/CoCreateJS/metrics](https://github.com/CoCreateJS/metrics) and select your feature branch.
 Click the 'Pull Request' button and fill out the form. Pull requests are usually reviewed within a few days.
 
 ## Rebase

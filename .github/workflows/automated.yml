@@ -12,16 +12,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Sync package.json description to GitHub About
+      - name: Sync package.json description and keywords to GitHub repository
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB }}
+          GH_TOKEN: ${{ secrets.GITHUB }}
         run: |
-          DESC=$(jq -r '.description // empty' package.json)
-          if [ -n "$DESC" ]; then
-            echo "Updating repository description to: $DESC"
-            gh api -X PATCH repos/${{ github.repository }} -f description="$DESC"
+          if [ ! -f package.json ]; then
+            echo "No package.json found; skipping repository metadata sync."
+            exit 0
+          fi
+
+          DESCRIPTION=$(jq -r '.description // empty' package.json)
+          if [ -n "$DESCRIPTION" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}" -f description="$DESCRIPTION"
           else
-            echo "No description found in package.json."
+            echo "No package description found; leaving GitHub description unchanged."
+          fi
+
+          if jq -e '.keywords | type == "array"' package.json >/dev/null; then
+            TOPICS=$(jq -c '.keywords | map(ascii_downcase | gsub("[^a-z0-9-]+"; "-") | gsub("(^-+|-+$)"; "") | .[0:50]) | map(select(length > 0)) | unique | .[0:20]' package.json)
+            printf '{"names":%s}' "$TOPICS" | gh api --method PUT -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/topics" --input -
+          else
+            echo "No package keywords found; leaving GitHub topics unchanged."
           fi
 
   release:
