@@ -1,3 +1,15 @@
+# [2.0.0](https://github.com/CoCreateJS/telemetry/compare/v1.16.2...v2.0.0) (2026-11-02)
+
+
+### chore
+
+* record package identity migration as breaking ([189b0f9](https://github.com/CoCreateJS/telemetry/commit/189b0f9bfb2d55b3269e2777bf3f2af759165ee5))
+
+
+### BREAKING CHANGES
+
+* Consumers must install @cocreate/telemetry and use the CoCreateJS repository identity; previous package and repository identities are no longer supported.
+
 ## [1.16.2](https://github.com/CoCreateJS/telemetry/compare/v1.16.1...v1.16.2) (2026-11-02)
 
 
