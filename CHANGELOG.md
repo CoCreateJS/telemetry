@@ -1,3 +1,23 @@
+## [1.16.2](https://github.com/CoCreateJS/telemetry/compare/v1.16.1...v1.16.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* add Deno specific entries to .gitignore ([d456f2e](https://github.com/CoCreateJS/telemetry/commit/d456f2e415866057ee97502531c56d15b97783a9))
+* add missing dependencies section in package.json ([b6fdb40](https://github.com/CoCreateJS/telemetry/commit/b6fdb408f6ae0a3edafb697fba031a5d732906f6))
+* bump [@cocreate](https://github.com/cocreate) dependencies ([d74d2a2](https://github.com/CoCreateJS/telemetry/commit/d74d2a29095b28ee6470bae37f41983b2213fd8b))
+* bump versions ([511ecc2](https://github.com/CoCreateJS/telemetry/commit/511ecc2ea803141eef79e587b24ea702b3a02812))
+* missing dependencies ([6d516fa](https://github.com/CoCreateJS/telemetry/commit/6d516fa0af4341459c145f53f31458ac4176c87c))
+* remove trailing slash from node_modules entry in .gitignore ([bd59ecc](https://github.com/CoCreateJS/telemetry/commit/bd59ecc6007444d40be1f1d907e29565aed0ef0c))
+* rename parameter in init function for clarity ([c469ea7](https://github.com/CoCreateJS/telemetry/commit/c469ea7d12e72e514a98859aab70e700f271d8bc))
+* rename telemetry array from 'system_telemetry' to 'servers_telemetry' ([230a979](https://github.com/CoCreateJS/telemetry/commit/230a97913ea0f717b25c3bb053681de510f7fb04))
+* update copyright year and improve telemetry configuration handling ([e6e9687](https://github.com/CoCreateJS/telemetry/commit/e6e9687955e652a1b2469947f655b07a0d99592c))
+* update git url ([8f15c11](https://github.com/CoCreateJS/telemetry/commit/8f15c11846f939df91dc4422ef7664fb642233c3))
+* update GitHub Actions to use latest versions and sync package.json description ([3054204](https://github.com/CoCreateJS/telemetry/commit/3054204a5ca3ab8b8a3584031de669bbfa0e503b))
+* update memory and CPU threshold handling in telemetry monitoring ([a3a2076](https://github.com/CoCreateJS/telemetry/commit/a3a20760bbce9fbfe5e74f977253e894cd4b6a1f))
+* update telemetry configuration retrieval to use Config.get method ([10f6587](https://github.com/CoCreateJS/telemetry/commit/10f6587f8ed28e0b2a3000b119cf8c108ded265e))
+* update telemetry cordon handling and documentation ([53a9e0b](https://github.com/CoCreateJS/telemetry/commit/53a9e0b7184950e5aab8e348924a666755dedc82))
+
 ## [1.16.1](https://github.com/CoCreateJS/telemetry/compare/v1.16.0...v1.16.1) (2026-07-19)
 
 
