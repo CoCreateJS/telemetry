@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/CoCreateJS/telemetry/compare/v2.0.0...v2.0.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* upgrade CoCreate dependencies to v2 ([bb03eca](https://github.com/CoCreateJS/telemetry/commit/bb03eca0d55b19e1264ab1b2e4f1207c2860fe87))
+
 # [2.0.0](https://github.com/CoCreateJS/telemetry/compare/v1.16.2...v2.0.0) (2026-11-02)
 
 
