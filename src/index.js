@@ -767,7 +767,7 @@ async function save() {
             if (dbResponse && dbResponse.error) {
                 console.error(`[@cocreate/telemetry] [WORKER ${server.workerId}] Database telemetry registration rejected:`, dbResponse.error);
             } else if (dbResponse) {
-                server.wsManager.send(dbResponse);
+                server.send(dbResponse);
             }
         }
 
