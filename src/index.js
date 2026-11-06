@@ -659,13 +659,13 @@ async function save() {
         }
 
         const workerId = server?.workerId || 1;
-        const totalWorkers = server?.totalWorkers || 1;
+        const workerCount = server?.workers?.size ?? 0;
 
         const aggregatedPayload = {
             component: 'telemetry',
             serverId: server?.id,
             workerId: workerId,
-            totalWorkers: totalWorkers,
+            totalWorkers: workerCount,
             timestamp: new Date().toISOString(),
             interval_seconds: Math.round((Date.now() - lastDbFlushTimestamp) / 1000),
             samples_collected: totalSamples,
@@ -815,12 +815,12 @@ function start() {
     const collectionInterval = parseInt(getValueFromObject(telemetryConfig, 'collectionInterval'), 10) || defaults.collectionInterval;
     const customWriteInterval = parseInt(getValueFromObject(telemetryConfig, 'writeInterval'), 10) || defaults.writeInterval;
     const workerId = server?.workerId || 1;
-    const totalWorkers = server?.totalWorkers || 1;
+    const workerCount = server?.workers?.size ?? 0;
 
     stop();
     lastCpuInfo = readCpuInfo();
 
-    const phaseOffset = ((workerId - 1) / totalWorkers) * customWriteInterval;
+    const phaseOffset = (workerCount > 0 ? ((workerId - 1) % workerCount) / workerCount : 0) * customWriteInterval;
     lastDbFlushTimestamp = Date.now() - phaseOffset;
 
     dbBuffer = [];
