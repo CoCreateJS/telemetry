@@ -1,3 +1,11 @@
+## [2.0.2](https://github.com/CoCreateJS/telemetry/compare/v2.0.1...v2.0.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* derive worker counts from the live collection ([4620de7](https://github.com/CoCreateJS/telemetry/commit/4620de7b7d2206c9d0a19297772422ad9501356b))
+* route component responses through unified server send ([ec6b3f8](https://github.com/CoCreateJS/telemetry/commit/ec6b3f8483df8180790cd344b718efa691d3bbbd))
+
 ## [2.0.1](https://github.com/CoCreateJS/telemetry/compare/v2.0.0...v2.0.1) (2026-11-05)
 
 
